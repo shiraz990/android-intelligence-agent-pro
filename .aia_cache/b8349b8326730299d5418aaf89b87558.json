@@ -1,0 +1,130 @@
+{
+  "rules": {
+    "todos": 0,
+    "fixmes": 0,
+    "printlns": 0,
+    "logd": 0,
+    "http_urls": 2,
+    "api_keys": 0,
+    "large_files": 0,
+    "deprecated_apis": [],
+    "magic_numbers": 3,
+    "hardcoded_strings": 2,
+    "null_assertions": 0,
+    "security_issues": [],
+    "complex_files": []
+  },
+  "analysis": {
+    "kotlin_files": 6,
+    "activities": 2,
+    "fragments": 0,
+    "services": 0,
+    "receivers": 0,
+    "compose": 4,
+    "viewmodels": 0,
+    "repositories": 0,
+    "use_cases": 0,
+    "tests": 2,
+    "technologies": {
+      "Jetpack Compose": true,
+      "Material3": true,
+      "Navigation": false,
+      "Retrofit": false,
+      "Room": false,
+      "WorkManager": false,
+      "Coroutines": false,
+      "Hilt": false,
+      "Paging3": false,
+      "DataStore": false,
+      "Ktor": false,
+      "Coil": false,
+      "Glide": false,
+      "OkHttp": false,
+      "Moshi": false
+    },
+    "arch_pattern": "Unknown / No clear pattern",
+    "recommendations": [
+      "\u26a0 No ViewModel detected.",
+      "\u26a0 No Repository layer detected.",
+      "\u26a0 No UseCase layer \u2014 consider Clean Architecture.",
+      "\u26a0 Hilt DI not detected.",
+      "\u26a0 Kotlin Coroutines not detected.",
+      "\ud83d\udea8 HTTP (non-HTTPS) URLs detected."
+    ],
+    "duplicates": [],
+    "compose_issues": [],
+    "git": {
+      "file_stats": {},
+      "total_commits": 0,
+      "authors": []
+    },
+    "hotspots": [],
+    "total_lines": 481
+  },
+  "vulns": {
+    "dependencies": [
+      {
+        "coordinate": "agp",
+        "group_artifact": "agp",
+        "version": "8.7.0-rc01"
+      },
+      {
+        "coordinate": "kotlin",
+        "group_artifact": "kotlin",
+        "version": "2.0.0"
+      },
+      {
+        "coordinate": "coreKtx",
+        "group_artifact": "coreKtx",
+        "version": "1.16.0"
+      },
+      {
+        "coordinate": "junit",
+        "group_artifact": "junit",
+        "version": "4.13.2"
+      },
+      {
+        "coordinate": "junitVersion",
+        "group_artifact": "junitVersion",
+        "version": "1.3.0"
+      },
+      {
+        "coordinate": "espressoCore",
+        "group_artifact": "espressoCore",
+        "version": "3.7.0"
+      },
+      {
+        "coordinate": "lifecycleRuntimeKtx",
+        "group_artifact": "lifecycleRuntimeKtx",
+        "version": "2.9.2"
+      },
+      {
+        "coordinate": "activityCompose",
+        "group_artifact": "activityCompose",
+        "version": "1.10.1"
+      },
+      {
+        "coordinate": "composeBom",
+        "group_artifact": "composeBom",
+        "version": "2024.04.01"
+      }
+    ],
+    "vulnerabilities": [],
+    "scanned": 9
+  },
+  "health": {
+    "overall": 74,
+    "categories": {
+      "Architecture": 25,
+      "Code Quality": 98,
+      "Security": 80,
+      "Testing": 75,
+      "Performance": 95
+    }
+  },
+  "ai_reviews": {
+    "security": "# Security Review (Score /10)\n\n## Critical Risks\n\n**HIGH:**\n- **HTTP URLs detected:** The presence of HTTP URLs in the project indicate\nindicates that sensitive data or services might be exposed over unencrypted\nunencrypted connections, which could lead to eavesdropping and data interce\ninterception.\n\n## Vulnerable Dependencies\n\nNo specific vulnerable dependencies are listed based on the provided data. \nHowever, it's important to ensure all used libraries are up-to-date and sec\nsecure against known vulnerabilities.\n\n## Top 5 Security Fixes (numbered, most critical first)\n\n1. **Switch to HTTPS:** Replace HTTP URLs with HTTPS in the project to encr\nencrypt data transmitted between clients and servers.\n   - **Impact:** This will protect sensitive information from being interce\nintercepted during transmission, reducing the risk of unauthorized access a\nand data breaches.\n\n2. **Update Dependencies:** Ensure all used libraries are up-to-date and pa\npatched against known vulnerabilities.\n   - **Impact:** Regularly updating dependencies helps mitigate risks assoc\nassociated with vulnerabilities in those libraries.\n\n3. **Implement API Key Security:** If your project interacts with external \nAPIs, ensure proper security measures are in place to protect API keys.\n   - **Impact:** Protecting API keys prevents unauthorized access to third-\nthird-party services and sensitive data.\n\n4. **Use Secure Data Storage:** Implement secure methods for storing sensit\nsensitive data such as passwords or personal information. Consider using en\nencrypted storage solutions like SQLite with encryption enabled or using li\nlibraries like `Android Keystore System`.\n   - **Impact:** Protecting stored data ensures that it remains confidentia\nconfidential even if the device is compromised.\n\n5. **Secure Network Connections:** Implement robust network security measur\nmeasures, including SSL/TLS for secure connections and implementing firewal\nfirewall rules to prevent unauthorized access to your app.\n   - **Impact:** Ensuring secure network connections helps protect sensitiv\nsensitive data from being exposed through insecure channels.",
+    "architecture": "**Architecture Review**\n\n Score: 6/10\n\n**Detected Pattern**: The architecture pattern is unknown and lacks a clear\nclear structure.\n\n**Strengths**: None explicitly mentioned.\n\n**Critical Weaknesses**: \n\n1. **No Repository layer detected**: This can lead to tight coupling betwee\nbetween layers, making the system harder to maintain.\n2. **No UseCase layer**: Without a clean separation of concerns, it's chall\nchallenging to manage complex business logic.\n3. **Hilt DI not detected**: The use of Hilt or another dependency injectio\ninjection framework is crucial for managing dependencies and testing.\n4. **Kotlin Coroutines not detected**: The absence of coroutines can result\nresult in blocking code, making the system less responsive.\n\n**Top 5 Architecture Improvements**\n\n1. Introduce a Repository layer to decouple data access from business logic\nlogic.\n2. Implement a UseCase layer to separate business logic from presentation c\nconcerns.\n3. Set up Hilt DI to manage dependencies and improve testability.\n4. Replace HTTP URLs with HTTPS (if possible) or refactor existing code to \nhandle non-HTTPS URLs securely.\n5. Consider adopting Clean Architecture as the underlying pattern, which wo\nwould help structure the project better.\n\nOverall, while the project has a good Health Score, it lacks a clear archit\narchitecture, making it challenging to maintain and extend in the future. A\nAddressing these weaknesses and improving the overall architecture will imp\nimprove the code's quality and scalability.",
+    "performance": "## Performance & Best Practices Review \n\n**Composition Recomposition Risks:** This review highlights a potential ris\nrisk of excessive recomposition in the project due to the high number of Co\nComposable Functions (4).  Recomposition can significantly impact performan\nperformance, especially with frequent UI updates. It's essential to identif\nidentify and optimize **specific areas where composable functions are being\nbeing triggered**. \n\n**Memory & Threading Concerns:** The lack of a Repository layer and UseCase\nUseCase layer suggests a potential for poor memory management. This might i\nincrease garbage collection overhead and impact thread usage.  Consider ado\nadopting the principles of **Clean Architecture**, which can help structure\nstructure data, models, and business logic effectively to minimize memory c\nconsumption and improve threading efficiency. \n\n**Top 5 Performance Improvements (numbered):**\n\n1. **Identify & Eliminate Recomposition Sources:** Analyze your Composable \nfunctions to pinpoint those triggering frequent recompositions.  Focus on m\nminimizing UI updates where possible through code optimization.\n2. **Implement Data Binding:** Leverage Android's powerful data binding cap\ncapabilities to ensure efficient data transfer and UI rendering. \n3. **Utilize CoroutineScope for Asynchronous Tasks:** Employ `CoroutineScop\n`CoroutineScope` with appropriate `launch` and `async` functions to manage \nasynchronous operations, such as network requests or heavy computations.  T\nThis allows the main thread to remain responsive and prevents performance b\nbottlenecks.  \n4. **Consider Memory Leak Detection Tools:** Regularly leverage tools like \nAndroid Profiler and Android Studio's memory profiler to identify potential\npotential memory leaks and address them proactively. \n5. **Optimize Network Requests:** When dealing with network requests, ensur\nensure they are handled efficiently using efficient request handling librar\nlibraries (e.g., Retrofit or Volley) and utilize caching strategies wheneve\nwhenever possible.\n\n\nBy focusing on these performance improvements, you can significantly enhanc\nenhance the app's user experience and improve overall performance."
+  }
+}
