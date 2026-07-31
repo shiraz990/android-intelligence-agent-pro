@@ -74,7 +74,7 @@ with st.sidebar:
 
 project_path = st.text_input(
     "Android Project Path",
-    "/Users/shiraz/Documents/Android/AutomationApp"
+    "/Users/Android/AndroidApp"
 )
 
 if st.button("🚀 Analyze Project", type="primary"):

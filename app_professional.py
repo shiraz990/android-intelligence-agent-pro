@@ -217,7 +217,7 @@ with st.sidebar:
 # Main content
 project_path = st.text_input(
     "📁 Android Project Path",
-    "/Users/shiraz/Documents/Android/AutomationApp",
+    "/Users/Android/AndroidApp",
     help="Enter the absolute path to your Android project root directory"
 )
 
