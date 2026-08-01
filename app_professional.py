@@ -58,36 +58,6 @@ def open_file_explorer():
         return False
 
 
-def suggest_project_paths():
-    """Suggest common Android project paths on the system"""
-    home = os.path.expanduser("~")
-    paths = []
-
-    common_locations = [
-        os.path.join(home, "AndroidStudioProjects"),
-        os.path.join(home, "Documents", "Android"),
-        os.path.join(home, "Android"),
-        os.path.join(home, "Desktop", "Android"),
-        os.path.join(home, "source", "Android"),
-        os.path.join(home, "IdeaProjects"),
-    ]
-
-    for path in common_locations:
-        if os.path.exists(path):
-            paths.append(path)
-            try:
-                for item in os.listdir(path):
-                    full_path = os.path.join(path, item)
-                    if os.path.isdir(full_path):
-                        if os.path.exists(os.path.join(full_path, "app")) or \
-                                os.path.exists(os.path.join(full_path, "build.gradle")):
-                            paths.append(full_path)
-            except:
-                pass
-
-    return paths[:10]
-
-
 # ── LOGO ───────────────────────────────────────────────────────
 CUSTOM_LOGO_SVG = '''<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
 <defs>
@@ -140,18 +110,29 @@ st.markdown("""
 .main-header p  { font-size: 1.1rem; opacity: 0.9; margin: 0.5rem 0 0 0; }
 .sidebar-logo { text-align: center; padding: 15px 0; margin-bottom: 10px; }
 .sidebar-logo svg { 
-    width: 50px;   /* ← SMALLER */
-    height: 50px;  /* ← SMALLER */
+    width: 50px;
+    height: 50px;
     border-radius: 12px;
     box-shadow: 0 2px 10px rgba(34, 211, 238, 0.15);
 }
-.sidebar-logo h3 { color: #667eea; margin: 10px 0 5px 0; font-weight: 700; }
-.sidebar-logo p  { font-size: 11px; color: #8B5CF6; margin: 0; font-weight: 500; }
+.sidebar-logo h3 { 
+    color: #667eea; 
+    margin: 8px 0 3px 0;
+    font-weight: 700; 
+    font-size: 16px;
+}
+.sidebar-logo p  { 
+    font-size: 10px;
+    color: #8B5CF6; 
+    margin: 0; 
+    font-weight: 500; 
+}
 .status-badge {
     display: inline-block;
     background: linear-gradient(135deg, #22D3EE, #8B5CF6);
-    color: white; padding: 2px 12px; border-radius: 10px;
-    font-size: 9px; font-weight: 600; margin-top: 5px;
+    color: white; padding: 2px 10px; border-radius: 10px;
+    font-size: 8px;
+    font-weight: 600; margin-top: 4px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -243,7 +224,7 @@ with st.sidebar:
     st.caption(f"Issues fixed this session: **{applied_count}**")
     st.caption(f"Analysis ready: **{'Yes' if st.session_state.analysis_done else 'No'}**")
 
-# ── PROJECT PATH WITH FILE UPLOADER (Optimized) ──────────────
+# ── PROJECT PATH (Cross-Platform) ─────────────────────────────
 st.markdown("### 📁 Select Android Project")
 
 # Show current path status
@@ -252,97 +233,100 @@ if st.session_state.project_path and os.path.exists(st.session_state.project_pat
 elif st.session_state.project_path:
     st.warning(f"⚠️ Path does not exist: {st.session_state.project_path}")
 
-# Method 1: File upload to detect path
-st.markdown("#### Option 1: Select a file from your project")
-st.caption("Upload any file from your Android project (e.g., build.gradle, AndroidManifest.xml)")
+# Method 1: File upload to detect path (Works on macOS, Linux)
+if platform.system() != "Windows":
+    st.markdown("#### Option 1: Select a file from your project")
+    st.caption("Upload any file from your Android project (e.g., build.gradle, AndroidManifest.xml)")
 
-uploaded_file = st.file_uploader(
-    "Choose a file from your Android project",
-    type=["gradle", "kt", "java", "xml", "properties", "toml"],
-    key="project_file_uploader",
-    help="Select any file from your Android project to auto-detect the path"
-)
+    uploaded_file = st.file_uploader(
+        "Choose a file from your Android project",
+        type=["gradle", "kt", "java", "xml", "properties", "toml"],
+        key="project_file_uploader",
+        help="Select any file from your Android project to auto-detect the path"
+    )
 
-if uploaded_file is not None:
-    file_name = uploaded_file.name
-    st.info(f"📄 Selected: {file_name}")
+    if uploaded_file is not None:
+        file_name = uploaded_file.name
+        st.info(f"📄 Selected: {file_name}")
 
-    # Try to find the file in common Android project locations (limited search)
-    home = os.path.expanduser("~")
-    found_paths = []
+        # Try to find the file in common Android project locations (limited search)
+        home = os.path.expanduser("~")
+        found_paths = []
 
-    # Only search in these specific locations
-    search_dirs = [
-        os.path.join(home, "AndroidStudioProjects"),
-        os.path.join(home, "Documents", "Android"),
-        os.path.join(home, "Android"),
-        os.path.join(home, "Desktop", "Android"),
-        os.path.join(home, "source", "Android"),
-        os.path.join(home, "IdeaProjects"),
-    ]
+        # Only search in these specific locations
+        search_dirs = [
+            os.path.join(home, "AndroidStudioProjects"),
+            os.path.join(home, "Documents", "Android"),
+            os.path.join(home, "Android"),
+            os.path.join(home, "Desktop", "Android"),
+            os.path.join(home, "source", "Android"),
+            os.path.join(home, "IdeaProjects"),
+        ]
 
-    # Filter to only existing directories
-    search_dirs = [d for d in search_dirs if os.path.exists(d)]
+        # Filter to only existing directories
+        search_dirs = [d for d in search_dirs if os.path.exists(d)]
 
-    if not search_dirs:
-        st.warning("No common Android project directories found.")
-        st.markdown("Please use Option 2 to enter the path manually.")
-    else:
-        with st.spinner("Searching for your file in common locations..."):
-            found_paths = []
-            for search_dir in search_dirs:
-                try:
-                    # Only search 2 levels deep
-                    for root, dirs, files in os.walk(search_dir):
-                        # Limit depth to avoid scanning too much
-                        depth = root.replace(search_dir, "").count(os.sep)
-                        if depth > 3:
-                            continue
-                        if file_name in files:
-                            full_path = os.path.join(root, file_name)
-                            found_paths.append(full_path)
-                            if len(found_paths) >= 3:
-                                break
-                    if found_paths:
-                        break
-                except Exception:
-                    continue
-
-        if found_paths:
-            st.success(f"✅ Found {len(found_paths)} match(es)!")
-            for idx, path in enumerate(found_paths):
-                project_root = os.path.dirname(path)
-                # Try to find the project root (where build.gradle or app/ exists)
-                max_iterations = 5
-                iterations = 0
-                while project_root and iterations < max_iterations:
-                    iterations += 1
-                    if os.path.exists(os.path.join(project_root, "build.gradle")) or \
-                            os.path.exists(os.path.join(project_root, "app", "build.gradle")):
-                        break
-                    parent = os.path.dirname(project_root)
-                    if parent == project_root:
-                        break
-                    project_root = parent
-
-                # Use a unique key with index to avoid duplicates
-                unique_key = f"found_{idx}_{hash(path) % 1000000}"
-                if st.button(f"📁 Use: {project_root}", key=unique_key):
-                    st.session_state.project_path = project_root
-                    st.rerun()
-                st.caption(f"  (from: {path})")
+        if not search_dirs:
+            st.warning("No common Android project directories found.")
+            st.markdown("Please use Option 2 to enter the path manually.")
         else:
-            st.warning(f"File '{file_name}' not found in common Android project locations.")
-            st.markdown("""
-            **Why this might happen:**
-            1. Your project is in a non-standard location
-            2. The file name doesn't match exactly
+            with st.spinner("Searching for your file in common locations..."):
+                found_paths = []
+                for search_dir in search_dirs:
+                    try:
+                        # Only search 2 levels deep
+                        for root, dirs, files in os.walk(search_dir):
+                            # Limit depth to avoid scanning too much
+                            depth = root.replace(search_dir, "").count(os.sep)
+                            if depth > 3:
+                                continue
+                            if file_name in files:
+                                full_path = os.path.join(root, file_name)
+                                found_paths.append(full_path)
+                                if len(found_paths) >= 3:
+                                    break
+                        if found_paths:
+                            break
+                    except Exception:
+                        continue
 
-            **Solution:** Use Option 2 below to enter the path manually.
-            """)
+            if found_paths:
+                st.success(f"✅ Found {len(found_paths)} match(es)!")
+                for idx, path in enumerate(found_paths):
+                    project_root = os.path.dirname(path)
+                    # Try to find the project root (where build.gradle or app/ exists)
+                    max_iterations = 5
+                    iterations = 0
+                    while project_root and iterations < max_iterations:
+                        iterations += 1
+                        if os.path.exists(os.path.join(project_root, "build.gradle")) or \
+                                os.path.exists(os.path.join(project_root, "app", "build.gradle")):
+                            break
+                        parent = os.path.dirname(project_root)
+                        if parent == project_root:
+                            break
+                        project_root = parent
 
-st.markdown("---")
-st.markdown("#### Option 2: Enter path manually")
+                    unique_key = f"found_{idx}_{hash(path) % 1000000}"
+                    if st.button(f"📁 Use: {project_root}", key=unique_key):
+                        st.session_state.project_path = project_root
+                        st.rerun()
+                    st.caption(f"  (from: {path})")
+            else:
+                st.warning(f"File '{file_name}' not found in common Android project locations.")
+                st.markdown("""
+                **Why this might happen:**
+                1. Your project is in a non-standard location
+                2. The file name doesn't match exactly
+
+                **Solution:** Use Option 2 below to enter the path manually.
+                """)
+
+    st.markdown("---")
+    st.markdown("#### Option 2: Enter path manually")
+
+# Method 2: Simple path input (Works on all platforms)
+st.markdown("#### Enter your project path")
 
 # Path input with helper buttons
 col1, col2, col3 = st.columns([5, 1, 1])
@@ -352,7 +336,7 @@ with col1:
         "Project Path",
         value=st.session_state.get('project_path', ''),
         placeholder="Enter the full path to your Android project",
-        help="Example: /Users/username/AndroidStudioProjects/MyApp",
+        help="Example: C:\\Users\\username\\AndroidStudioProjects\\MyApp",
         key="project_path_input"
     )
 
@@ -374,30 +358,77 @@ with col3:
 if project_path:
     st.session_state.project_path = project_path
 
-# ── QUICK PATH SUGGESTIONS ────────────────────────────────────
+# ── QUICK PATH SUGGESTIONS (Cross-Platform) ──────────────────
 with st.expander("💡 Quick Path Suggestions", expanded=False):
-    suggestions = suggest_project_paths()
+    st.markdown("**Common Android project locations:**")
 
-    if suggestions:
+    # Detect OS and set appropriate paths
+    if platform.system() == "Windows":
+        home = os.path.expanduser("~")
+        common_paths = [
+            os.path.join(home, "AndroidStudioProjects"),
+            os.path.join(home, "Documents", "AndroidStudioProjects"),
+            os.path.join(home, "Desktop", "AndroidStudioProjects"),
+            os.path.join(home, "source", "Android"),
+            os.path.join(home, "IdeaProjects"),
+            "C:\\AndroidProjects",
+            "D:\\AndroidProjects",
+        ]
+    else:  # macOS / Linux
+        home = os.path.expanduser("~")
+        common_paths = [
+            os.path.join(home, "AndroidStudioProjects"),
+            os.path.join(home, "Documents", "Android"),
+            os.path.join(home, "Android"),
+            os.path.join(home, "Desktop", "Android"),
+            os.path.join(home, "source", "Android"),
+            os.path.join(home, "IdeaProjects"),
+        ]
+
+    # Find existing paths
+    existing_paths = []
+    for path in common_paths:
+        if os.path.exists(path):
+            existing_paths.append(path)
+            # Also show subdirectories
+            try:
+                for item in os.listdir(path):
+                    full_path = os.path.join(path, item)
+                    if os.path.isdir(full_path):
+                        # Check if it looks like an Android project
+                        if os.path.exists(os.path.join(full_path, "app")) or \
+                                os.path.exists(os.path.join(full_path, "build.gradle")):
+                            existing_paths.append(full_path)
+            except:
+                pass
+
+    if existing_paths:
         st.markdown("**Click a path below to auto-fill:**")
 
-        cols = st.columns(2)
-        for i, path in enumerate(suggestions):
-            if i < 10:
-                cols[i % 2].markdown(f"📁 **{os.path.basename(path)}**")
-                if cols[i % 2].button(f"Select", key=f"suggest_{i}_{hash(path) % 1000000}"):
-                    st.session_state.project_path = path
-                    st.rerun()
-                cols[i % 2].caption(f"`{path}`")
-                cols[i % 2].markdown("---")
+        # Show in a scrollable container
+        for i, path in enumerate(existing_paths[:8]):
+            unique_key = f"suggest_{i}_{hash(path) % 1000000}"
+            if st.button(f"📁 {path}", key=unique_key):
+                st.session_state.project_path = path
+                st.rerun()
     else:
         st.info("No Android projects found in common locations.")
+        st.markdown("""
+        **Tips for finding your project:**
+        1. Open your Android Studio project
+        2. Right-click on the project name in the Project panel
+        3. Select "Show in Explorer" (Windows) or "Show in Finder" (macOS)
+        4. Copy the path from the address bar
+        """)
 
     st.markdown("---")
     st.markdown("**Example paths:**")
-    st.code("/Users/username/AndroidStudioProjects/MyApp", language="text")
-    st.code("/Users/username/Documents/Android/MyApp", language="text")
-    st.code("C:\\Users\\username\\AndroidStudioProjects\\MyApp", language="text")
+    if platform.system() == "Windows":
+        st.code("C:\\Users\\username\\AndroidStudioProjects\\MyApp", language="text")
+        st.code("D:\\AndroidProjects\\MyApp", language="text")
+    else:
+        st.code("/Users/username/AndroidStudioProjects/MyApp", language="text")
+        st.code("/Users/username/Documents/Android/MyApp", language="text")
 
 st.markdown("---")
 
