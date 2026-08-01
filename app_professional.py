@@ -26,6 +26,9 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import subprocess
 
+import base64
+from typing import Tuple, List, Dict, Optional  # ✅ Add Tuple here
+
 sys.path.insert(0, os.getcwd())
 
 from backend.services.scanner import scan_project
@@ -110,6 +113,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SIDEBAR ────────────────────────────────────────────────────
+# ── placed just before `with st.sidebar:` ─────────────────────
+def _check_ollama() -> Tuple[bool, List[str]]:
+    try:
+        r = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True, text=True, timeout=5
+        )
+        if r.returncode == 0:
+            models = [
+                line.split()[0]
+                for line in r.stdout.strip().splitlines()[1:]
+                if line.strip()
+            ]
+            return True, models
+        return False, []
+    except Exception:
+        return False, []
+
+OLLAMA_RUNNING, OLLAMA_MODELS = _check_ollama()
+
 with st.sidebar:
     st.markdown(f"""
     <div class="sidebar-logo">
@@ -143,11 +166,21 @@ with st.sidebar:
 - ⚡ **gemma2:2b** — Performance
         """)
 
-    try:
-        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5)
-        st.success("✅ Ollama Running") if r.returncode == 0 else st.error("❌ Ollama Not Running")
-    except Exception:
+        # ✅ ONLY ONE STATUS CHECK — reads from variable set at top of file
+    st.markdown("---")
+    st.markdown("### 🖥 Ollama Status")
+    if OLLAMA_RUNNING:
+        st.success("✅ Ollama Running")
+        if OLLAMA_MODELS:
+            with st.expander("Installed models", expanded=False):
+                for m in OLLAMA_MODELS:
+                    st.caption(f"• {m}")
+        else:
+            st.caption("No models pulled yet — run `ollama pull <model>`")
+    else:
         st.error("❌ Ollama Not Found")
+        st.caption("Start it with:")
+        st.code("ollama serve", language="bash")
 
     st.markdown("---")
     st.markdown("### 📊 Quick Stats")
