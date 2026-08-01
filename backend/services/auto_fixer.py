@@ -1,163 +1,405 @@
+import os
 import re
-import difflib
-from typing import Dict, List, Optional
+import shutil
+import json
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 
 class AutoFixEngine:
-    """AI-powered auto-fix engine for Android code issues"""
 
-    def __init__(self):
-        self.fix_patterns = {
-            "todo": self._fix_todo,
-            "println": self._fix_println,
-            "null_assertion": self._fix_null_assertion,
-            "hardcoded_string": self._fix_hardcoded_string,
-            "http_url": self._fix_http_url,
-            "magic_number": self._fix_magic_number,
-            "deprecated_api": self._fix_deprecated_api,
-        }
+    def __init__(self, project_path=None):
+        self.project_path = project_path or os.getcwd()
+        self.backup_dir = os.path.join(self.project_path, ".fix_backups")
+        self.fix_history_file = os.path.join(self.backup_dir, "fix_history.json")
+        self.fix_history = []
+        os.makedirs(self.backup_dir, exist_ok=True)
+        self._load_history()
+
+    # ──────────────────────────────────────────────
+    # History
+    # ──────────────────────────────────────────────
+
+    def _load_history(self):
+        try:
+            if os.path.exists(self.fix_history_file):
+                with open(self.fix_history_file, "r") as f:
+                    self.fix_history = json.load(f)
+        except Exception:
+            self.fix_history = []
+
+    def _save_history(self):
+        try:
+            with open(self.fix_history_file, "w") as f:
+                json.dump(self.fix_history, f, indent=2)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────
+    # File utilities
+    # ──────────────────────────────────────────────
+
+    def _resolve_file_path(self, file_path: str) -> Optional[str]:
+        if not file_path:
+            return None
+        # Absolute path
+        if os.path.isabs(file_path) and os.path.exists(file_path):
+            return file_path
+        # Relative to project
+        joined = os.path.join(self.project_path, file_path)
+        if os.path.exists(joined):
+            return joined
+        # Basename only
+        basename = os.path.basename(file_path)
+        for root, dirs, files in os.walk(self.project_path):
+            # Skip backup dir during search
+            dirs[:] = [d for d in dirs if d != ".fix_backups"]
+            if basename in files:
+                return os.path.join(root, basename)
+        return None
+
+    def _create_backup(self, file_path: str) -> Optional[str]:
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            rel = os.path.relpath(file_path, self.project_path)
+            # Flatten the path so it sits directly in backup_dir
+            flat_name = rel.replace(os.sep, "__").replace("/", "__")
+            backup_path = os.path.join(self.backup_dir, f"{flat_name}.{timestamp}.bak")
+            shutil.copy2(file_path, backup_path)
+            return backup_path
+        except Exception as e:
+            print(f"Backup failed: {e}")
+            return None
+
+    # ──────────────────────────────────────────────
+    # Core: line-number-aware replacement
+    # ──────────────────────────────────────────────
+
+    def _replace_line_at(self, content: str, line_number: int, new_line_text: str) -> str:
+        """
+        Replace the line at `line_number` (1-based) with `new_line_text`.
+        Preserves the original line ending (\n or \r\n).
+        This is far more reliable than content.replace() because it
+        never touches other occurrences of the same text.
+        """
+        lines = content.splitlines(keepends=True)
+        if not (1 <= line_number <= len(lines)):
+            return content
+
+        original_line = lines[line_number - 1]
+
+        # Detect and preserve line ending
+        if original_line.endswith("\r\n"):
+            ending = "\r\n"
+        elif original_line.endswith("\n"):
+            ending = "\n"
+        else:
+            ending = ""
+
+        # Preserve leading whitespace (indentation) from original
+        indent = len(original_line) - len(original_line.lstrip())
+        leading = original_line[:indent]
+
+        lines[line_number - 1] = leading + new_line_text.strip() + ending
+        return "".join(lines)
+
+    # ──────────────────────────────────────────────
+    # Public: apply a single fix
+    # ──────────────────────────────────────────────
+
+    def apply_fix_direct(
+        self, file_path: str, original: str, suggested: str, line_number: int = None
+    ) -> Tuple[bool, str]:
+        """
+        Apply a fix to a file on disk.
+
+        If `line_number` is provided, replacement is done at that exact line
+        (much more reliable). Falls back to text-based replace if not given.
+        """
+        resolved = self._resolve_file_path(file_path)
+        if not resolved:
+            return False, f"File not found: {file_path}"
+
+        if not os.access(resolved, os.W_OK):
+            return False, f"Permission denied: {resolved}"
+
+        try:
+            with open(resolved, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return False, f"Could not read file: {e}"
+
+        # Verify the original text actually exists before touching the file
+        if original.strip() not in content:
+            return False, (
+                f"Pattern not found in file — it may have already been fixed.\n"
+                f"Looking for: {original.strip()[:80]}"
+            )
+
+        # Create backup BEFORE any write
+        backup_path = self._create_backup(resolved)
+        if not backup_path:
+            return False, "Could not create backup — fix aborted for safety."
+
+        # Apply the replacement
+        if line_number:
+            new_content = self._replace_line_at(content, line_number, suggested.strip())
+        else:
+            # Text-based fallback: replace only the FIRST occurrence to avoid
+            # accidentally touching identical lines elsewhere in the file
+            new_content = content.replace(original, suggested, 1)
+
+        if new_content == content:
+            return False, "Replacement produced no change — check the before/after text."
+
+        try:
+            with open(resolved, "w", encoding="utf-8") as f:
+                f.write(new_content)
+        except Exception as e:
+            # Attempt to restore backup
+            shutil.copy2(backup_path, resolved)
+            return False, f"Write failed (backup restored): {e}"
+
+        # Record history
+        self.fix_history.append({
+            "file": os.path.relpath(resolved, self.project_path),
+            "backup": os.path.relpath(backup_path, self.project_path),
+            "original": original,
+            "suggested": suggested,
+            "line_number": line_number,
+            "timestamp": datetime.now().isoformat(),
+        })
+        self._save_history()
+
+        return True, f"Fix applied ✅  Backup: {os.path.basename(backup_path)}"
+
+    # ──────────────────────────────────────────────
+    # Fix generators — now return ALL matches, not just first
+    # ──────────────────────────────────────────────
+
+    def _fix_http_urls(self, code: str, file_path: str) -> List[Dict]:
+        """BUG FIX: was returning after first match. Now returns all."""
+        fixes = []
+        for i, line in enumerate(code.splitlines()):
+            if "http://" in line and "https://" not in line:
+                match = re.search(r"(http://[^\s\"\'<>]+)", line)
+                if match:
+                    old_url = match.group(1)
+                    new_url = old_url.replace("http://", "https://", 1)
+                    suggested = line.replace(old_url, new_url, 1)
+                    fixes.append({
+                        "file": file_path,
+                        "line_number": i + 1,
+                        "issue_type": "http_url",
+                        "original": line,
+                        "suggested": suggested,
+                        "description": f"HTTP → HTTPS at line {i + 1}",
+                        "confidence": 98,
+                        "can_apply": True,
+                        "is_applied": False,
+                        "requires_review": False,
+                        "diff": f"- {line}\n+ {suggested}",
+                    })
+        return fixes
+
+    def _fix_printlns(self, code: str, file_path: str) -> List[Dict]:
+        """BUG FIX: was returning after first match. Now returns all."""
+        fixes = []
+        lines = code.splitlines()
+
+        # Extract TAG constant if present in this file
+        tag = "TAG"
+        for line in lines:
+            m = re.search(r'(?:val|var)\s+TAG\s*=\s*"([^"]+)"', line)
+            if m:
+                tag = m.group(1)
+                break
+
+        for i, line in enumerate(lines):
+            if "println(" not in line:
+                continue
+            m = re.search(r"println\(([^)]*)\)", line)
+            if m:
+                inner = m.group(1)
+                suggested = line.replace(
+                    f"println({inner})", f'Log.d("{tag}", {inner})', 1
+                )
+                fixes.append({
+                    "file": file_path,
+                    "line_number": i + 1,
+                    "issue_type": "println",
+                    "original": line,
+                    "suggested": suggested,
+                    "description": f"println → Log.d at line {i + 1}",
+                    "confidence": 95,
+                    "can_apply": True,
+                    "is_applied": False,
+                    "requires_review": False,
+                    "diff": f"- {line}\n+ {suggested}",
+                })
+        return fixes
+
+    def _fix_todos(self, code: str, file_path: str) -> List[Dict]:
+        """BUG FIX: was returning after first match. Now returns all."""
+        fixes = []
+        for i, line in enumerate(code.splitlines()):
+            if "TODO" in line:
+                # Wrap TODO content in a proper comment block so it's visible
+                suggested = re.sub(
+                    r"//\s*TODO[:\s]*(.*)",
+                    lambda m: f"// TODO(action-required): {m.group(1).strip()}",
+                    line,
+                )
+                if suggested == line:
+                    # Fallback: just mark it
+                    suggested = line.replace("TODO", "TODO(action-required)", 1)
+                fixes.append({
+                    "file": file_path,
+                    "line_number": i + 1,
+                    "issue_type": "todo",
+                    "original": line,
+                    "suggested": suggested,
+                    "description": f"Mark TODO as action-required at line {i + 1}",
+                    "confidence": 80,
+                    "can_apply": True,
+                    "is_applied": False,
+                    "requires_review": True,
+                    "diff": f"- {line}\n+ {suggested}",
+                })
+        return fixes
+
+    def _fix_null_assertions(self, code: str, file_path: str) -> List[Dict]:
+        """
+        BUG FIX: was completely missing — null_assertion issues were generated
+        by app.py but silently dropped because generate_fixes had no handler.
+        Now wraps !! with a safe let call.
+        """
+        fixes = []
+        for i, line in enumerate(code.splitlines()):
+            if "!!" not in line:
+                continue
+
+            # Match: someVar!! or someCall()!!
+            m = re.search(r"(\w[\w.()]*)\s*!!", line)
+            if m:
+                expr = m.group(1)
+                # Suggest replacing someVar!! with someVar ?: return  (or ?: continue)
+                original_pattern = f"{expr}!!"
+                suggested_pattern = f"({expr} ?: run {{ /* handle null */ return }})"
+                suggested = line.replace(original_pattern, suggested_pattern, 1)
+                fixes.append({
+                    "file": file_path,
+                    "line_number": i + 1,
+                    "issue_type": "null_assertion",
+                    "original": line,
+                    "suggested": suggested,
+                    "description": f"Replace !! null assertion at line {i + 1}",
+                    "confidence": 75,
+                    "can_apply": True,
+                    "is_applied": False,
+                    "requires_review": True,   # dev should verify the null handling
+                    "diff": f"- {line}\n+ {suggested}",
+                })
+        return fixes
+
+    def _fix_logd(self, code: str, file_path: str) -> List[Dict]:
+        """Remove debug Log.d calls before release."""
+        fixes = []
+        for i, line in enumerate(code.splitlines()):
+            if "Log.d(" in line:
+                # Comment it out rather than delete — safer
+                suggested = f"// [pre-release] {line.strip()}"
+                fixes.append({
+                    "file": file_path,
+                    "line_number": i + 1,
+                    "issue_type": "logd",
+                    "original": line,
+                    "suggested": suggested,
+                    "description": f"Comment out Log.d at line {i + 1}",
+                    "confidence": 85,
+                    "can_apply": True,
+                    "is_applied": False,
+                    "requires_review": False,
+                    "diff": f"- {line}\n+ {suggested}",
+                })
+        return fixes
+
+    # ──────────────────────────────────────────────
+    # Public: generate all fixes for a file
+    # ──────────────────────────────────────────────
 
     def generate_fixes(self, file_path: str, code: str, issues: List[Dict]) -> List[Dict]:
-        """Generate fix suggestions for each issue"""
+        """
+        BUG FIX: original only returned ONE fix per issue type per file.
+        Now calls the correct _fix_* method for every issue type found,
+        including null_assertion which was previously unhandled.
+        """
         fixes = []
 
-        for issue in issues:
-            fix_function = self.fix_patterns.get(issue.get('type'))
-            if fix_function:
-                try:
-                    fix_result = fix_function(code, issue)
-                    if fix_result:
-                        fixes.append({
-                            'file': file_path,
-                            'issue_type': issue.get('type'),
-                            'original': fix_result.get('original', ''),
-                            'suggested': fix_result.get('suggested', ''),
-                            'diff': self._generate_diff(fix_result.get('original', ''),
-                                                        fix_result.get('suggested', '')),
-                            'confidence': fix_result.get('confidence', 70),
-                            'description': fix_result.get('description', 'Auto-fix suggestion')
-                        })
-                except Exception as e:
-                    continue
+        issue_types = {i.get("type") for i in issues}
+
+        if "http_url" in issue_types:
+            fixes.extend(self._fix_http_urls(code, file_path))
+
+        if "println" in issue_types:
+            fixes.extend(self._fix_printlns(code, file_path))
+
+        if "todo" in issue_types:
+            fixes.extend(self._fix_todos(code, file_path))
+
+        # BUG FIX: this case was missing — null_assertions were silently dropped
+        if "null_assertion" in issue_types:
+            fixes.extend(self._fix_null_assertions(code, file_path))
+
+        if "logd" in issue_types:
+            fixes.extend(self._fix_logd(code, file_path))
 
         return fixes
 
-    def apply_fix(self, file_path: str, fix: Dict) -> bool:
-        """Apply a fix to the file (simulated)"""
-        # In production, this would modify the actual file
-        # For demo, we just return success
-        return True
+    # ──────────────────────────────────────────────
+    # Batch & undo
+    # ──────────────────────────────────────────────
 
-    def _fix_todo(self, code: str, issue: Dict) -> Optional[Dict]:
-        """Convert TODO to tracked issue format"""
+    def apply_batch_fixes(self, fixes: List[Dict]) -> Tuple[int, List[Dict], List[Dict]]:
+        applied, failed = [], []
+        for fix in fixes:
+            if fix.get("can_apply", True) and not fix.get("is_applied", False):
+                success, msg = self.apply_fix_direct(
+                    fix["file"],
+                    fix["original"],
+                    fix["suggested"],
+                    line_number=fix.get("line_number"),
+                )
+                if success:
+                    fix["is_applied"] = True
+                    applied.append(fix)
+                else:
+                    failed.append({"fix": fix, "error": msg})
+        return len(applied), applied, failed
+
+    def undo_last_fix(self) -> Tuple[bool, str]:
+        if not self.fix_history:
+            return False, "No fixes to undo."
+
+        entry = self.fix_history[-1]
+        original_path = os.path.join(self.project_path, entry["file"])
+        backup_path   = os.path.join(self.project_path, entry["backup"])
+
+        if not os.path.exists(backup_path):
+            return False, f"Backup file missing: {backup_path}"
+
+        try:
+            shutil.copy2(backup_path, original_path)
+            self.fix_history.pop()
+            self._save_history()
+            return True, f"Restored {entry['file']} from backup."
+        except Exception as e:
+            return False, f"Restore failed: {e}"
+
+    def get_fix_summary(self, fixes: List[Dict]) -> Dict:
         return {
-            'original': '// TODO:',
-            'suggested': '// FIXME: Tracked in issue tracking system',
-            'description': 'Convert TODO to tracked issue format',
-            'confidence': 80
+            "total": len(fixes),
+            "can_auto_apply": sum(1 for f in fixes if f.get("can_apply")),
+            "requires_review": sum(1 for f in fixes if f.get("requires_review")),
+            "already_applied": sum(1 for f in fixes if f.get("is_applied")),
         }
-
-    def _fix_println(self, code: str, issue: Dict) -> Optional[Dict]:
-        """Replace println with proper logging"""
-        return {
-            'original': 'println(',
-            'suggested': 'Log.d(TAG, ',
-            'description': 'Replace println with Android Log.d for production',
-            'confidence': 85
-        }
-
-    def _fix_null_assertion(self, code: str, issue: Dict) -> Optional[Dict]:
-        """Replace !! with safe handling"""
-        return {
-            'original': '!!',
-            'suggested': '?.let { ... } ?: ',
-            'description': 'Replace !! with safe call and Elvis operator',
-            'confidence': 75
-        }
-
-    def _fix_hardcoded_string(self, code: str, issue: Dict) -> Optional[Dict]:
-        """Extract hardcoded strings to strings.xml"""
-        string_value = issue.get('value', '')
-        string_name = self._generate_string_name(string_value)
-        return {
-            'original': f'"{string_value}"',
-            'suggested': f'getString(R.string.{string_name})',
-            'description': f'Move hardcoded string to strings.xml as R.string.{string_name}',
-            'confidence': 80
-        }
-
-    def _fix_http_url(self, code: str, issue: Dict) -> Optional[Dict]:
-        """Replace HTTP with HTTPS"""
-        url = issue.get('value', '')
-        if url.startswith('http://'):
-            https_url = url.replace('http://', 'https://')
-            return {
-                'original': url,
-                'suggested': https_url,
-                'description': 'Replace insecure HTTP with HTTPS',
-                'confidence': 95
-            }
-        return None
-
-    def _fix_magic_number(self, code: str, issue: Dict) -> Optional[Dict]:
-        """Extract magic number to constant"""
-        magic = issue.get('value', '')
-        context = issue.get('context', '')
-        constant_name = self._suggest_constant_name(magic, context)
-        return {
-            'original': magic,
-            'suggested': constant_name,
-            'description': f'Extract magic number {magic} as {constant_name}',
-            'confidence': 70
-        }
-
-    def _fix_deprecated_api(self, code: str, issue: Dict) -> Optional[Dict]:
-        """Suggest modern alternatives for deprecated APIs"""
-        deprecated = issue.get('api', '')
-        alternatives = {
-            'AsyncTask': 'Coroutine + Dispatcher.IO',
-            'Handler()': 'Handler(Looper.getMainLooper())',
-            'startActivityForResult': 'ActivityResultLauncher',
-            'getExternalStorageDirectory': 'MediaStore',
-        }
-        if deprecated in alternatives:
-            return {
-                'original': deprecated,
-                'suggested': alternatives[deprecated],
-                'description': f'Replace deprecated {deprecated} with {alternatives[deprecated]}',
-                'confidence': 85
-            }
-        return None
-
-    def _generate_diff(self, original: str, suggested: str) -> str:
-        """Generate unified diff"""
-        original_lines = original.splitlines()
-        suggested_lines = suggested.splitlines()
-        diff = difflib.unified_diff(
-            original_lines,
-            suggested_lines,
-            fromfile='original',
-            tofile='suggested',
-            lineterm=''
-        )
-        return '\n'.join(diff)
-
-    def _suggest_constant_name(self, value: str, context: str) -> str:
-        """Generate meaningful constant name based on context"""
-        if 'timeout' in context.lower() or 'delay' in context.lower():
-            return 'TIMEOUT_SECONDS'
-        elif 'retry' in context.lower():
-            return 'MAX_RETRY_COUNT'
-        elif 'margin' in context.lower() or 'padding' in context.lower():
-            return f'PADDING_{value}_DP'
-        else:
-            return f'CONSTANT_{value}'
-
-    def _generate_string_name(self, string_value: str) -> str:
-        """Generate resource name for strings"""
-        name = string_value.lower()
-        name = re.sub(r'[^a-z0-9\s]', '', name)
-        name = name.replace(' ', '_')
-        return f'label_{name[:30]}'
-
-

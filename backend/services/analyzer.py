@@ -1,5 +1,7 @@
 import re
 import hashlib
+from typing import List, Dict  # Add this import
+
 
 def detect_technologies(gradle_text):
     tech_map = {
@@ -16,6 +18,7 @@ def detect_technologies(gradle_text):
     for name, keyword in tech_map.items():
         detected[name] = keyword in gradle_text.lower()
     return detected
+
 
 def detect_duplicates(files, block_size=8):
     block_hashes = {}
@@ -54,6 +57,7 @@ def detect_duplicates(files, block_size=8):
 
     return unique[:20]
 
+
 def analyze_compose(files):
     issues = []
     for file in files:
@@ -86,5 +90,45 @@ def analyze_compose(files):
                 "issue": "Data class passed to Composable without @Stable/@Immutable annotation",
                 "severity": "info"
             })
+
+    return issues
+
+
+def detect_fixable_issues(file_path: str, code: str) -> List[Dict]:
+    """Detect fixable issues in a file"""
+    issues = []
+
+    # Use the full file path
+    if 'http://' in code and 'https://' not in code:
+        issues.append({
+            'type': 'http_url',
+            'file': file_path,
+            'severity': 'high',
+            'line_number': 0
+        })
+
+    if 'TODO' in code and 'FIXME' not in code:
+        issues.append({
+            'type': 'todo',
+            'file': file_path,
+            'severity': 'medium',
+            'line_number': 0
+        })
+
+    if '!!' in code:
+        issues.append({
+            'type': 'null_assertion',
+            'file': file_path,
+            'severity': 'high',
+            'line_number': 0
+        })
+
+    if 'println(' in code:
+        issues.append({
+            'type': 'println',
+            'file': file_path,
+            'severity': 'low',
+            'line_number': 0
+        })
 
     return issues
