@@ -17,17 +17,18 @@ if "applied_fixes" not in st.session_state:
     st.session_state.applied_fixes = set()
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = {}
+if "project_path" not in st.session_state:
+    st.session_state.project_path = ""
 
 import os
 import sys
 import traceback
 import plotly.graph_objects as go
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Tuple, List, Dict, Optional
 import subprocess
-
+import platform
 import base64
-from typing import Tuple, List, Dict, Optional  # ✅ Add Tuple here
 
 sys.path.insert(0, os.getcwd())
 
@@ -38,6 +39,54 @@ from backend.services.vulnerability import scan_vulnerabilities
 from backend.services.health_score import calculate_health_score
 from backend.services.ai_reviewer import review_project, get_model_info
 from backend.services.auto_fixer import AutoFixEngine
+
+
+# ── SAFE FOLDER PICKER (No tkinter) ──────────────────────────
+def open_file_explorer():
+    """Open file explorer at a default location"""
+    try:
+        home = os.path.expanduser("~")
+        if platform.system() == "Windows":
+            os.startfile(home)
+        elif platform.system() == "Darwin":  # macOS
+            subprocess.Popen(["open", home])
+        else:  # Linux
+            subprocess.Popen(["xdg-open", home])
+        return True
+    except Exception as e:
+        st.error(f"Could not open file explorer: {e}")
+        return False
+
+
+def suggest_project_paths():
+    """Suggest common Android project paths on the system"""
+    home = os.path.expanduser("~")
+    paths = []
+
+    common_locations = [
+        os.path.join(home, "AndroidStudioProjects"),
+        os.path.join(home, "Documents", "Android"),
+        os.path.join(home, "Android"),
+        os.path.join(home, "Desktop", "Android"),
+        os.path.join(home, "source", "Android"),
+        os.path.join(home, "IdeaProjects"),
+    ]
+
+    for path in common_locations:
+        if os.path.exists(path):
+            paths.append(path)
+            try:
+                for item in os.listdir(path):
+                    full_path = os.path.join(path, item)
+                    if os.path.isdir(full_path):
+                        if os.path.exists(os.path.join(full_path, "app")) or \
+                                os.path.exists(os.path.join(full_path, "build.gradle")):
+                            paths.append(full_path)
+            except:
+                pass
+
+    return paths[:10]
+
 
 # ── LOGO ───────────────────────────────────────────────────────
 CUSTOM_LOGO_SVG = '''<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
@@ -90,6 +139,12 @@ st.markdown("""
 .main-header h1 { font-size: 2.5rem; font-weight: 700; margin: 0; }
 .main-header p  { font-size: 1.1rem; opacity: 0.9; margin: 0.5rem 0 0 0; }
 .sidebar-logo { text-align: center; padding: 15px 0; margin-bottom: 10px; }
+.sidebar-logo svg { 
+    width: 50px;   /* ← SMALLER */
+    height: 50px;  /* ← SMALLER */
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(34, 211, 238, 0.15);
+}
 .sidebar-logo h3 { color: #667eea; margin: 10px 0 5px 0; font-weight: 700; }
 .sidebar-logo p  { font-size: 11px; color: #8B5CF6; margin: 0; font-weight: 500; }
 .status-badge {
@@ -112,8 +167,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+
 # ── SIDEBAR ────────────────────────────────────────────────────
-# ── placed just before `with st.sidebar:` ─────────────────────
 def _check_ollama() -> Tuple[bool, List[str]]:
     try:
         r = subprocess.run(
@@ -131,6 +186,7 @@ def _check_ollama() -> Tuple[bool, List[str]]:
     except Exception:
         return False, []
 
+
 OLLAMA_RUNNING, OLLAMA_MODELS = _check_ollama()
 
 with st.sidebar:
@@ -145,10 +201,10 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### ⚙️ Analysis Configuration")
-    run_ai       = st.toggle("🧠 AI Review",          value=True)
+    run_ai = st.toggle("🧠 AI Review", value=True)
     run_auto_fix = st.toggle("🔧 Auto-Fix Suggestions", value=True)
-    run_vulns    = st.toggle("🛡️ CVE Scanning",        value=True)
-    run_compose  = st.toggle("🎨 Compose Analysis",    value=True)
+    run_vulns = st.toggle("🛡️ CVE Scanning", value=True)
+    run_compose = st.toggle("🎨 Compose Analysis", value=True)
 
     st.markdown("---")
     st.markdown("### 🧠 AI Models")
@@ -166,7 +222,6 @@ with st.sidebar:
 - ⚡ **gemma2:2b** — Performance
         """)
 
-        # ✅ ONLY ONE STATUS CHECK — reads from variable set at top of file
     st.markdown("---")
     st.markdown("### 🖥 Ollama Status")
     if OLLAMA_RUNNING:
@@ -188,13 +243,165 @@ with st.sidebar:
     st.caption(f"Issues fixed this session: **{applied_count}**")
     st.caption(f"Analysis ready: **{'Yes' if st.session_state.analysis_done else 'No'}**")
 
-# ── PATH INPUT + BUTTONS ───────────────────────────────────────
-project_path = st.text_input(
-    "📁 Android Project Path",
-    "/Users/shiraz/Documents/Android/AutomationApp",
-    help="Absolute path to your Android project root"
+# ── PROJECT PATH WITH FILE UPLOADER (Optimized) ──────────────
+st.markdown("### 📁 Select Android Project")
+
+# Show current path status
+if st.session_state.project_path and os.path.exists(st.session_state.project_path):
+    st.success(f"✅ Path exists: {st.session_state.project_path}")
+elif st.session_state.project_path:
+    st.warning(f"⚠️ Path does not exist: {st.session_state.project_path}")
+
+# Method 1: File upload to detect path
+st.markdown("#### Option 1: Select a file from your project")
+st.caption("Upload any file from your Android project (e.g., build.gradle, AndroidManifest.xml)")
+
+uploaded_file = st.file_uploader(
+    "Choose a file from your Android project",
+    type=["gradle", "kt", "java", "xml", "properties", "toml"],
+    key="project_file_uploader",
+    help="Select any file from your Android project to auto-detect the path"
 )
 
+if uploaded_file is not None:
+    file_name = uploaded_file.name
+    st.info(f"📄 Selected: {file_name}")
+
+    # Try to find the file in common Android project locations (limited search)
+    home = os.path.expanduser("~")
+    found_paths = []
+
+    # Only search in these specific locations
+    search_dirs = [
+        os.path.join(home, "AndroidStudioProjects"),
+        os.path.join(home, "Documents", "Android"),
+        os.path.join(home, "Android"),
+        os.path.join(home, "Desktop", "Android"),
+        os.path.join(home, "source", "Android"),
+        os.path.join(home, "IdeaProjects"),
+    ]
+
+    # Filter to only existing directories
+    search_dirs = [d for d in search_dirs if os.path.exists(d)]
+
+    if not search_dirs:
+        st.warning("No common Android project directories found.")
+        st.markdown("Please use Option 2 to enter the path manually.")
+    else:
+        with st.spinner("Searching for your file in common locations..."):
+            found_paths = []
+            for search_dir in search_dirs:
+                try:
+                    # Only search 2 levels deep
+                    for root, dirs, files in os.walk(search_dir):
+                        # Limit depth to avoid scanning too much
+                        depth = root.replace(search_dir, "").count(os.sep)
+                        if depth > 3:
+                            continue
+                        if file_name in files:
+                            full_path = os.path.join(root, file_name)
+                            found_paths.append(full_path)
+                            if len(found_paths) >= 3:
+                                break
+                    if found_paths:
+                        break
+                except Exception:
+                    continue
+
+        if found_paths:
+            st.success(f"✅ Found {len(found_paths)} match(es)!")
+            for idx, path in enumerate(found_paths):
+                project_root = os.path.dirname(path)
+                # Try to find the project root (where build.gradle or app/ exists)
+                max_iterations = 5
+                iterations = 0
+                while project_root and iterations < max_iterations:
+                    iterations += 1
+                    if os.path.exists(os.path.join(project_root, "build.gradle")) or \
+                            os.path.exists(os.path.join(project_root, "app", "build.gradle")):
+                        break
+                    parent = os.path.dirname(project_root)
+                    if parent == project_root:
+                        break
+                    project_root = parent
+
+                # Use a unique key with index to avoid duplicates
+                unique_key = f"found_{idx}_{hash(path) % 1000000}"
+                if st.button(f"📁 Use: {project_root}", key=unique_key):
+                    st.session_state.project_path = project_root
+                    st.rerun()
+                st.caption(f"  (from: {path})")
+        else:
+            st.warning(f"File '{file_name}' not found in common Android project locations.")
+            st.markdown("""
+            **Why this might happen:**
+            1. Your project is in a non-standard location
+            2. The file name doesn't match exactly
+
+            **Solution:** Use Option 2 below to enter the path manually.
+            """)
+
+st.markdown("---")
+st.markdown("#### Option 2: Enter path manually")
+
+# Path input with helper buttons
+col1, col2, col3 = st.columns([5, 1, 1])
+
+with col1:
+    project_path = st.text_input(
+        "Project Path",
+        value=st.session_state.get('project_path', ''),
+        placeholder="Enter the full path to your Android project",
+        help="Example: /Users/username/AndroidStudioProjects/MyApp",
+        key="project_path_input"
+    )
+
+with col2:
+    st.write("")  # Spacing
+    st.write("")  # Spacing
+    if st.button("📂 Open Explorer", use_container_width=True):
+        if open_file_explorer():
+            st.info("📂 File explorer opened. Copy the path and paste it above.")
+
+with col3:
+    st.write("")  # Spacing
+    st.write("")  # Spacing
+    if st.button("🔄 Reset", use_container_width=True):
+        st.session_state.project_path = ""
+        st.rerun()
+
+# Save to session state
+if project_path:
+    st.session_state.project_path = project_path
+
+# ── QUICK PATH SUGGESTIONS ────────────────────────────────────
+with st.expander("💡 Quick Path Suggestions", expanded=False):
+    suggestions = suggest_project_paths()
+
+    if suggestions:
+        st.markdown("**Click a path below to auto-fill:**")
+
+        cols = st.columns(2)
+        for i, path in enumerate(suggestions):
+            if i < 10:
+                cols[i % 2].markdown(f"📁 **{os.path.basename(path)}**")
+                if cols[i % 2].button(f"Select", key=f"suggest_{i}_{hash(path) % 1000000}"):
+                    st.session_state.project_path = path
+                    st.rerun()
+                cols[i % 2].caption(f"`{path}`")
+                cols[i % 2].markdown("---")
+    else:
+        st.info("No Android projects found in common locations.")
+
+    st.markdown("---")
+    st.markdown("**Example paths:**")
+    st.code("/Users/username/AndroidStudioProjects/MyApp", language="text")
+    st.code("/Users/username/Documents/Android/MyApp", language="text")
+    st.code("C:\\Users\\username\\AndroidStudioProjects\\MyApp", language="text")
+
+st.markdown("---")
+
+# ── ANALYZE BUTTON ────────────────────────────────────────────
 col1, col2, col3 = st.columns([1, 1, 4])
 with col1:
     analyze_btn = st.button("🚀 Analyze Project", type="primary", use_container_width=True)
@@ -207,19 +414,21 @@ with col2:
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════
-# ANALYSIS BLOCK — runs only when Analyze is clicked
-# Saves everything to session_state, then falls through to display
+# ANALYSIS BLOCK
 # ══════════════════════════════════════════════════════════════
 if analyze_btn:
+    if not project_path:
+        st.error("❌ Please enter or select a project path first!")
+        st.stop()
+
     if not os.path.exists(project_path):
         st.error(f"❌ Path does not exist: {project_path}")
         st.stop()
 
-    # Reset applied fixes on fresh analysis
     st.session_state.applied_fixes = set()
 
     progress_bar = st.progress(0)
-    status_text  = st.empty()
+    status_text = st.empty()
 
     try:
         status_text.info("🔍 Scanning project files...")
@@ -236,9 +445,9 @@ if analyze_btn:
 
         status_text.info("🏗 Detecting architecture patterns...")
         progress_bar.progress(40)
-        gradle_text   = "\n".join(project["gradle_files"]) + "\n" + project["toml"]
-        technologies  = detect_technologies(gradle_text)
-        duplicates    = detect_duplicates(project["files"])
+        gradle_text = "\n".join(project["gradle_files"]) + "\n" + project["toml"]
+        technologies = detect_technologies(gradle_text)
+        duplicates = detect_duplicates(project["files"])
         compose_issues = analyze_compose(project["files"]) if run_compose else []
 
         kotlin_files = viewmodels = repositories = tests = 0
@@ -247,19 +456,19 @@ if analyze_btn:
                 continue
             kotlin_files += 1
             code = file["content"]
-            if "viewmodel"   in file["name"].lower() or "ViewModel"   in code: viewmodels   += 1
-            if "repository"  in file["name"].lower() or "Repository"  in code: repositories += 1
-            if "@Test" in code or "@test" in code.lower():                      tests        += 1
+            if "viewmodel" in file["name"].lower() or "ViewModel" in code: viewmodels += 1
+            if "repository" in file["name"].lower() or "Repository" in code: repositories += 1
+            if "@Test" in code or "@test" in code.lower():                      tests += 1
 
         analysis = {
-            "kotlin_files":   kotlin_files,
-            "viewmodels":     viewmodels,
-            "repositories":   repositories,
-            "tests":          tests,
-            "technologies":   technologies,
-            "duplicates":     duplicates,
+            "kotlin_files": kotlin_files,
+            "viewmodels": viewmodels,
+            "repositories": repositories,
+            "tests": tests,
+            "technologies": technologies,
+            "duplicates": duplicates,
             "compose_issues": compose_issues,
-            "total_lines":    sum(f["lines"] for f in project["files"]),
+            "total_lines": sum(f["lines"] for f in project["files"]),
             "recommendations": []
         }
 
@@ -280,7 +489,7 @@ if analyze_btn:
             summary = f"""
 Kotlin Files: {kotlin_files}  |  Total Lines: {analysis['total_lines']}
 ViewModels: {viewmodels}  |  Repositories: {repositories}  |  Tests: {tests}
-Technologies: {', '.join(k for k,v in technologies.items() if v)}
+Technologies: {', '.join(k for k, v in technologies.items() if v)}
 TODOs: {rules['todos']}  |  FIXMEs: {rules['fixmes']}  |  println(): {rules['printlns']}
 Null assertions: {rules['null_assertions']}  |  API Keys: {rules['api_keys']}
 CVEs found: {len(vulns['vulnerabilities'])}
@@ -303,14 +512,14 @@ Health Score: {health['overall']}/100
             for file in project["files"]:
                 if file["type"] not in ["kotlin", "java"]:
                     continue
-                code      = file["content"]
+                code = file["content"]
                 file_path = file["path"]
-                issues    = []
-                if "http://"   in code and "https://" not in code: issues.append({"type": "http_url",       "severity": "high"})
-                if "TODO"      in code:                             issues.append({"type": "todo",           "severity": "medium"})
-                if "!!"        in code:                             issues.append({"type": "null_assertion", "severity": "high"})
-                if "println("  in code:                             issues.append({"type": "println",        "severity": "low"})
-                if "Log.d("    in code:                             issues.append({"type": "logd",           "severity": "low"})
+                issues = []
+                if "http://" in code and "https://" not in code: issues.append({"type": "http_url", "severity": "high"})
+                if "TODO" in code:                             issues.append({"type": "todo", "severity": "medium"})
+                if "!!" in code:                             issues.append(
+                    {"type": "null_assertion", "severity": "high"})
+                if "println(" in code:                             issues.append({"type": "println", "severity": "low"})
                 if issues:
                     fixes.extend(fixer.generate_fixes(file_path, code, issues))
 
@@ -319,24 +528,23 @@ Health Score: {health['overall']}/100
         progress_bar.empty()
         status_text.empty()
 
-        # ── Persist everything so reruns can read it ───────────
-        st.session_state.analysis_done    = True
-        st.session_state.fixes            = fixes
+        st.session_state.analysis_done = True
+        st.session_state.fixes = fixes
         st.session_state.analysis_results = {
-            "project":        project,
-            "analysis":       analysis,
-            "rules":          rules,
-            "vulns":          vulns,
-            "health":         health,
-            "ai_reviews":     ai_reviews,
-            "technologies":   technologies,
-            "viewmodels":     viewmodels,
-            "repositories":   repositories,
-            "tests":          tests,
+            "project": project,
+            "analysis": analysis,
+            "rules": rules,
+            "vulns": vulns,
+            "health": health,
+            "ai_reviews": ai_reviews,
+            "technologies": technologies,
+            "viewmodels": viewmodels,
+            "repositories": repositories,
+            "tests": tests,
             "compose_issues": compose_issues,
-            "duplicates":     duplicates,
-            "project_path":   project_path,
-            "kotlin_files":   kotlin_files,
+            "duplicates": duplicates,
+            "project_path": project_path,
+            "kotlin_files": kotlin_files,
         }
 
     except Exception as e:
@@ -344,33 +552,29 @@ Health Score: {health['overall']}/100
         st.code(traceback.format_exc())
         st.stop()
 
-
 # ══════════════════════════════════════════════════════════════
-# DISPLAY BLOCK — reads from session_state, always rendered
-# This is what makes fix buttons actually work:
-# the buttons exist on every rerun, not just after Analyze click
+# DISPLAY BLOCK
 # ══════════════════════════════════════════════════════════════
 if not st.session_state.analysis_done:
     st.info("👆 Enter your Android project path above and click **Analyze Project** to begin.")
     st.stop()
 
-# Unpack session state into local vars for readability
-r             = st.session_state.analysis_results
-project       = r["project"]
-analysis      = r["analysis"]
-rules         = r["rules"]
-vulns         = r["vulns"]
-health        = r["health"]
-ai_reviews    = r["ai_reviews"]
-technologies  = r["technologies"]
-viewmodels    = r["viewmodels"]
-repositories  = r["repositories"]
-tests         = r["tests"]
-compose_issues= r["compose_issues"]
-duplicates    = r["duplicates"]
+r = st.session_state.analysis_results
+project = r["project"]
+analysis = r["analysis"]
+rules = r["rules"]
+vulns = r["vulns"]
+health = r["health"]
+ai_reviews = r["ai_reviews"]
+technologies = r["technologies"]
+viewmodels = r["viewmodels"]
+repositories = r["repositories"]
+tests = r["tests"]
+compose_issues = r["compose_issues"]
+duplicates = r["duplicates"]
 _project_path = r["project_path"]
-kotlin_files  = r["kotlin_files"]
-fixes_list    = st.session_state.fixes
+kotlin_files = r["kotlin_files"]
+fixes_list = st.session_state.fixes
 
 score = health["overall"]
 if score >= 80:
@@ -384,15 +588,15 @@ else:
     st.caption("🚨 Critical issues found — immediate action recommended.")
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("📄 Total Files",  len(project["files"]))
+col1.metric("📄 Total Files", len(project["files"]))
 col2.metric("📝 Kotlin Files", kotlin_files)
-col3.metric("📊 Total Lines",  f"{analysis['total_lines']:,}")
-col4.metric("🧪 Tests",        tests)
-col5.metric("🔒 CVEs Found",   len(vulns["vulnerabilities"]))
+col3.metric("📊 Total Lines", f"{analysis['total_lines']:,}")
+col4.metric("🧪 Tests", tests)
+col5.metric("🔒 CVEs Found", len(vulns["vulnerabilities"]))
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Overview", "🏗 Architecture", "🛡 Security",
-    "🎨 Compose",  "🤖 AI Review",   "🔧 Auto-Fix"
+    "🎨 Compose", "🤖 AI Review", "🔧 Auto-Fix"
 ])
 
 # ── TAB 1: Overview ───────────────────────────────────────────
@@ -422,20 +626,21 @@ with tab1:
         )
 
     st.markdown("### 📌 Recommendations")
-    if rules.get("todos", 0)            > 0: st.warning(f"⚠ **{rules['todos']} TODO comments**")
-    if rules.get("fixmes", 0)           > 0: st.warning(f"⚠ **{rules['fixmes']} FIXME comments**")
-    if rules.get("printlns", 0)         > 0: st.warning(f"⚠ **{rules['printlns']} println() calls** — use proper logging")
-    if rules.get("null_assertions", 0)  > 0: st.warning(f"⚠ **{rules['null_assertions']} !! null assertions** — use safe calls")
-    if viewmodels  == 0: st.error("🚨 **No ViewModels** — implement MVVM")
-    if repositories== 0: st.error("🚨 **No Repository layer** — consider Clean Architecture")
+    if rules.get("todos", 0) > 0: st.warning(f"⚠ **{rules['todos']} TODO comments**")
+    if rules.get("fixmes", 0) > 0: st.warning(f"⚠ **{rules['fixmes']} FIXME comments**")
+    if rules.get("printlns", 0) > 0: st.warning(f"⚠ **{rules['printlns']} println() calls** — use proper logging")
+    if rules.get("null_assertions", 0) > 0: st.warning(
+        f"⚠ **{rules['null_assertions']} !! null assertions** — use safe calls")
+    if viewmodels == 0: st.error("🚨 **No ViewModels** — implement MVVM")
+    if repositories == 0: st.error("🚨 **No Repository layer** — consider Clean Architecture")
 
 # ── TAB 2: Architecture ───────────────────────────────────────
 with tab2:
     st.markdown("### 🏗 Architecture Analysis")
     c1, c2, c3 = st.columns(3)
-    c1.metric("ViewModels",   viewmodels)
+    c1.metric("ViewModels", viewmodels)
     c2.metric("Repositories", repositories)
-    c3.metric("Tests",        tests)
+    c3.metric("Tests", tests)
 
     if viewmodels > 0 and repositories > 0:
         arch = "MVVM with Repository Pattern ✅"
@@ -466,15 +671,15 @@ with tab2:
 with tab3:
     st.markdown("### 🛡️ Security Analysis")
     c1, c2, c3 = st.columns(3)
-    c1.metric("CVEs Found",           len(vulns.get("vulnerabilities", [])))
+    c1.metric("CVEs Found", len(vulns.get("vulnerabilities", [])))
     c2.metric("Dependencies Scanned", vulns.get("scanned", 0))
-    c3.metric("API Keys Leaked",      rules.get("api_keys", 0))
+    c3.metric("API Keys Leaked", rules.get("api_keys", 0))
 
     if vulns.get("vulnerabilities"):
         for v in vulns["vulnerabilities"]:
-            with st.expander(f"🚨 {v.get('cve','?')} — {v.get('dependency','?')}"):
+            with st.expander(f"🚨 {v.get('cve', '?')} — {v.get('dependency', '?')}"):
                 st.write(v.get("description", "No description"))
-                st.caption(f"Severity: {v.get('severity','Unknown')} · Source: {v.get('source','')}")
+                st.caption(f"Severity: {v.get('severity', 'Unknown')} · Source: {v.get('source', '')}")
     else:
         st.success("✅ No known CVEs found")
 
@@ -503,7 +708,7 @@ with tab5:
         st.error(ai_reviews["error"])
     else:
         labels = {
-            "fixer":    "🛡 Security & Fixes · qwen2.5-coder:3b",
+            "fixer": "🛡 Security & Fixes · qwen2.5-coder:3b",
             "analyzer": "🏗 Architecture · deepseek-coder:1.3b",
             "reviewer": "⚡ Performance · gemma2:2b",
         }
@@ -515,8 +720,6 @@ with tab5:
                     st.markdown(text)
 
 # ── TAB 6: Auto-Fix ───────────────────────────────────────────
-# CRITICAL: this tab is OUTSIDE if analyze_btn — so fix buttons
-# are rendered on every rerun and their clicks are actually handled
 with tab6:
     st.markdown("### 🔧 Auto-Fix System")
     st.caption("Changes are written directly to disk. A backup is created before every change.")
@@ -528,14 +731,14 @@ with tab6:
     else:
         fixer = AutoFixEngine(project_path=_project_path)
 
-        total     = len(fixes_list)
-        applied   = len(st.session_state.applied_fixes)
+        total = len(fixes_list)
+        applied = len(st.session_state.applied_fixes)
         remaining = total - applied
 
         c1, c2, c3 = st.columns(3)
         c1.metric("📊 Total Fixes", total)
-        c2.metric("✅ Applied",     applied)
-        c3.metric("🔧 Remaining",   remaining)
+        c2.metric("✅ Applied", applied)
+        c3.metric("🔧 Remaining", remaining)
 
         if remaining == 0:
             st.success("🎉 All fixes applied!")
@@ -546,14 +749,14 @@ with tab6:
 
         for i, fix in enumerate(fixes_list):
             is_applied = i in st.session_state.applied_fixes
-            icon       = "✅" if is_applied else "🔧"
+            icon = "✅" if is_applied else "🔧"
             issue_type = fix.get("issue_type", "unknown")
-            file_path  = fix.get("file", "")
-            file_name  = os.path.basename(file_path)
+            file_path = fix.get("file", "")
+            file_name = os.path.basename(file_path)
 
             with st.expander(
-                f"{icon} Fix #{i+1} [{issue_type}] — {fix.get('description','')[:55]}...",
-                expanded=(not is_applied and i < 3)
+                    f"{icon} Fix #{i + 1} [{issue_type}] — {fix.get('description', '')[:55]}...",
+                    expanded=(not is_applied and i < 3)
             ):
                 st.write(f"**File:** `{file_name}`")
                 st.write(f"**Path:** `{file_path}`")
@@ -600,11 +803,11 @@ with tab6:
             st.divider()
             st.markdown("### 🚀 Batch Apply")
             if st.button(
-                f"✅ Apply All {len(pending)} Remaining Fixes",
-                type="primary",
-                key="batch_apply"
+                    f"✅ Apply All {len(pending)} Remaining Fixes",
+                    type="primary",
+                    key="batch_apply"
             ):
-                prog   = st.progress(0)
+                prog = st.progress(0)
                 failed = []
                 for n, i in enumerate(pending):
                     fix = fixes_list[i]
@@ -618,7 +821,7 @@ with tab6:
                     if ok:
                         st.session_state.applied_fixes.add(i)
                     else:
-                        failed.append({"desc": fix.get("description",""), "error": msg})
+                        failed.append({"desc": fix.get("description", ""), "error": msg})
                 prog.empty()
                 applied_now = len(pending) - len(failed)
                 if applied_now:
