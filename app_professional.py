@@ -37,8 +37,10 @@ from backend.services.rules_engine import analyze_rules
 from backend.services.analyzer import detect_technologies, detect_duplicates, analyze_compose
 from backend.services.vulnerability import scan_vulnerabilities
 from backend.services.health_score import calculate_health_score
-from backend.services.ai_reviewer import review_project, get_model_info
+from backend.services.ai_reviewer import review_project, get_model_info, role_display_label
 from backend.services.auto_fixer import AutoFixEngine
+from backend.services.report import generate_html_report, generate_pdf_bytes
+from backend.services.grounded_assessment import build_grounded_assessments
 
 
 # ── SAFE FOLDER PICKER (No tkinter) ──────────────────────────
@@ -210,9 +212,9 @@ with st.sidebar:
     try:
         model_info = get_model_info()
         st.info(f"""
-- 🏗 **{model_info['analyzer']['name']}** — Architecture
-- 🛡 **{model_info['fixer']['name']}** — Security
-- ⚡ **{model_info['reviewer']['name']}** — Performance
+- 🏗 **{model_info['analyzer']['name']}** — Architecture Assessment
+- 🛡 **{model_info['fixer']['name']}** — Security Assessment
+- ⚡ **{model_info['reviewer']['name']}** — Performance & Release Readiness
         """)
     except Exception:
         st.info("""
@@ -444,26 +446,95 @@ if analyze_btn:
         health = calculate_health_score(analysis, rules, vulns)
 
         ai_reviews = {}
+        grounded = build_grounded_assessments(
+            project_path=project_path,
+            analysis=analysis,
+            rules=rules,
+            vulns=vulns,
+            health=health,
+            technologies=technologies,
+            duplicates=duplicates,
+            compose_issues=compose_issues,
+        )
+
         if run_ai:
-            status_text.info("🧠 Running AI models in parallel (30–60s)...")
+            status_text.info("🧠 Building project-specific assessment (AI polish)...")
             progress_bar.progress(75)
+            tech_on = ", ".join(k for k, v in technologies.items() if v) or "None detected"
+            tech_off = ", ".join(k for k, v in technologies.items() if not v) or "None"
+            compose_lines = "; ".join(
+                f"{i['file']}: {i['issue']}" for i in compose_issues[:8]
+            ) or "None"
+            deprecated_lines = "; ".join(
+                f"{d['api']} in {d['file']}" for d in rules.get("deprecated_apis", [])[:8]
+            ) or "None"
+            sec_lines = "; ".join(
+                f"{s['issue']} in {s['file']}" for s in rules.get("security_issues", [])[:8]
+            ) or "None"
+            vuln_lines = "; ".join(
+                f"{v.get('cve', '?')} ({v.get('dependency', '?')})"
+                for v in vulns.get("vulnerabilities", [])[:8]
+            ) or "None"
+            dup_count = len(duplicates)
+            complex_files = ", ".join(
+                f"{c['file']}({c['complexity']})"
+                for c in rules.get("complex_files", [])[:6]
+            ) or "None"
+            cats = health.get("categories", {})
+            cat_line = ", ".join(f"{k}={v}" for k, v in cats.items())
+            if viewmodels > 0 and repositories > 0:
+                arch = "MVVM with Repository"
+            elif viewmodels > 0:
+                arch = "MVVM partial (no Repository)"
+            else:
+                arch = "Architecture unclear / not MVVM"
+
             summary = f"""
-Kotlin Files: {kotlin_files}  |  Total Lines: {analysis['total_lines']}
-ViewModels: {viewmodels}  |  Repositories: {repositories}  |  Tests: {tests}
-Technologies: {', '.join(k for k, v in technologies.items() if v)}
-TODOs: {rules['todos']}  |  FIXMEs: {rules['fixmes']}  |  println(): {rules['printlns']}
-Null assertions: {rules['null_assertions']}  |  API Keys: {rules['api_keys']}
-CVEs found: {len(vulns['vulnerabilities'])}
-Health Score: {health['overall']}/100
-"""[:1500]
+SCOPE: Static analysis only. Every finding must cite numbers/files from THIS project.
+
+PROJECT METRICS
+- Path: {project_path}
+- Kotlin/Java source files: {kotlin_files}
+- Total lines: {analysis['total_lines']}
+- Detected architecture: {arch}
+- ViewModels: {viewmodels} | Repositories: {repositories} | Tests (@Test): {tests}
+- Technologies present: {tech_on}
+- Technologies absent: {tech_off}
+
+HEALTH SCORE
+- Overall: {health['overall']}/100
+- Categories: {cat_line}
+
+CODE QUALITY SIGNALS
+- TODOs: {rules['todos']} | FIXMEs: {rules['fixmes']}
+- println(): {rules['printlns']} | Log.d(): {rules.get('logd', 0)}
+- Null assertions (!!): {rules['null_assertions']}
+- HTTP URLs: {rules.get('http_urls', 0)} | Large files (>300 LOC): {rules.get('large_files', 0)}
+- Duplicate code blocks found: {dup_count}
+- High-complexity files: {complex_files}
+- Deprecated APIs: {deprecated_lines}
+
+SECURITY SIGNALS
+- CVE findings: {len(vulns.get('vulnerabilities', []))} (deps scanned: {vulns.get('scanned', 0)})
+- CVE details: {vuln_lines}
+- Secret/weak-crypto patterns: {sec_lines}
+
+COMPOSE SIGNALS
+- Issues: {compose_lines}
+"""[:3500]
             try:
                 ai_status = st.empty()
-                ai_status.info("⏳ AI council analyzing — may take 1–2 minutes...")
-                ai_reviews = review_project(summary)
+                ai_status.info("⏳ Polishing project-grounded assessment with local models...")
+                ai_reviews = review_project(summary, grounded=grounded)
                 ai_status.empty()
             except Exception as e:
-                st.error(f"❌ AI Review failed: {e}")
-                ai_reviews = {}
+                st.warning(f"AI polish unavailable ({e}). Using project-grounded assessment.")
+                ai_reviews = grounded
+        else:
+            # Still produce a project-specific narrative for Export / Assessment tab
+            ai_reviews = grounded
+            status_text.info("📋 Built project-specific assessment (AI polish disabled)")
+            progress_bar.progress(75)
 
         fixes = []
         if run_auto_fix:
@@ -555,9 +626,9 @@ col3.metric("📊 Total Lines", f"{analysis['total_lines']:,}")
 col4.metric("🧪 Tests", tests)
 col5.metric("🔒 CVEs Found", len(vulns["vulnerabilities"]))
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Overview", "🏗 Architecture", "🛡 Security",
-    "🎨 Compose", "🛠️ AI Review", "🔧 Auto-Fix"
+    "🎨 Compose", "📋 Assessment", "🔧 Auto-Fix", "📄 Export"
 ])
 
 # ── TAB 1: Overview ───────────────────────────────────────────
@@ -673,23 +744,23 @@ with tab4:
 
 # ── TAB 5: AI Review ──────────────────────────────────────────
 with tab5:
-    st.markdown("### 🧠 Multi-Model AI Review")
-    if not run_ai:
-        st.info("AI Review is disabled. Enable it in the sidebar and re-run.")
-    elif not ai_reviews:
-        st.warning("No AI reviews returned. Check Ollama is running.")
-        st.code("ollama serve", language="bash")
-    elif "error" in ai_reviews:
+    st.markdown("### 🧠 Project Assessment")
+    st.caption(
+        "Findings are built from **this project's** scan results "
+        "(architecture, security, Compose, quality metrics). "
+        "Local AI may polish wording only — it cannot invent unrelated issues."
+    )
+    if not ai_reviews:
+        st.warning("No assessment available. Re-run analysis.")
+    elif "error" in ai_reviews and len(ai_reviews) == 1:
         st.error(ai_reviews["error"])
     else:
-        labels = {
-            "fixer": "🛡 Security & Fixes · qwen2.5-coder:3b",
-            "analyzer": "🏗 Architecture · deepseek-coder:1.3b",
-            "reviewer": "⚡ Performance · gemma2:2b",
-        }
         for role, text in ai_reviews.items():
-            with st.expander(labels.get(role, role.title()), expanded=True):
-                if isinstance(text, str) and text.startswith("❌"):
+            if role == "error":
+                st.error(text)
+                continue
+            with st.expander(role_display_label(role), expanded=True):
+                if isinstance(text, str) and (text.startswith("❌") or text.startswith("⏰")):
                     st.error(text)
                 else:
                     st.markdown(text)
@@ -820,6 +891,58 @@ with tab6:
             else:
                 st.error(msg)
             st.rerun()
+
+# ── TAB 7: Export ─────────────────────────────────────────────
+with tab7:
+    st.markdown("### 📄 Export Report")
+    st.caption(
+        "Download a shareable HTML report of this analysis. "
+        "PDF export is available if WeasyPrint is installed."
+    )
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    html = generate_html_report(
+        _project_path,
+        health,
+        analysis,
+        rules,
+        vulns,
+        ai_reviews,
+        technologies=technologies,
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "⬇ Download HTML Report",
+            data=html.encode("utf-8"),
+            file_name=f"appforge_report_{stamp}.html",
+            mime="text/html",
+            use_container_width=True,
+            type="primary",
+        )
+    with c2:
+        pdf_bytes, pdf_err = generate_pdf_bytes(html)
+        if pdf_bytes:
+            st.download_button(
+                "⬇ Download PDF Report",
+                data=pdf_bytes,
+                file_name=f"appforge_report_{stamp}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        else:
+            st.button(
+                "⬇ Download PDF Report",
+                disabled=True,
+                use_container_width=True,
+                help=pdf_err or "PDF unavailable",
+            )
+            if pdf_err:
+                st.caption(pdf_err)
+
+    with st.expander("👁 Preview report", expanded=False):
+        st.components.v1.html(html, height=600, scrolling=True)
 
 st.markdown("---")
 st.caption(

@@ -2,139 +2,216 @@ import subprocess
 import re
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+from typing import Dict, List, Optional
 
 # ============================================================
-# OPTIMIZED MODELS FOR EXACT LINE ERRORS & FIXES
+# LOCAL MODEL COUNCIL — project-grounded management reports
 # ============================================================
-# Qwen2.5-Coder: Best for exact code fixes and line-by-line analysis
-# DeepSeek-Coder: Best for complex bug detection
-# Gemma2: Fast and good for final review
+# Narratives are built from THIS project's scan first.
+# Local models may polish wording only; fluff falls back to grounded text.
 # ============================================================
 
 MODELS = {
-    # PRIMARY: Best for exact line errors and fixes
     "fixer": {
         "name": "qwen2.5-coder:3b",
-        "description": "Best for exact line errors and generating fixes",
-        "timeout": 300  # 5 minutes
+        "description": "Security risk assessment and remediation",
+        "timeout": 300,
+        "title": "Security Assessment",
     },
-    # SECONDARY: Catches different bugs the primary misses
     "analyzer": {
         "name": "deepseek-coder:1.3b",
-        "description": "Best for complex bug detection and edge cases",
-        "timeout": 180  # 3 minutes
+        "description": "Architecture and maintainability review",
+        "timeout": 180,
+        "title": "Architecture Assessment",
     },
-    # REVIEWER: Final sanity check
     "reviewer": {
         "name": "gemma2:2b",
-        "description": "Fast final review and best practices",
-        "timeout": 120  # 2 minutes
-    }
+        "description": "Performance and release-readiness review",
+        "timeout": 120,
+        "title": "Performance & Release Readiness",
+    },
 }
 
-# For backward compatibility
 MODEL_NAMES = {
     "architecture": MODELS["analyzer"]["name"],
     "security": MODELS["fixer"]["name"],
     "performance": MODELS["reviewer"]["name"],
 }
 
+_FLUFF_PATTERNS = [
+    r"(?i)let me know if you (have|need).*$",
+    r"(?i)feel free to (ask|share|provide).*$",
+    r"(?i)i hope this helps.*$",
+    r"(?i)happy to help.*$",
+    r"(?i)if you (can )?provide (more|additional).*$",
+    r"(?i)this is a generic example.*$",
+    r"(?i)further analysis using specialized tools.*$",
+    r"(?i)hindering a comprehensive analysis.*$",
+    r"(?i)missing performance data.*$",
+    r"(?i)the provided data lacks.*$",
+    r"(?i)lacks crucial perfor",
+    r"(?i)projectdata\.kt.*$",
+    r"(?i)^note:.*$",
+    r"(?i)^as an ai.*$",
+    r"(?i)^certainly[!.,].*$",
+    r"(?i)^sure[!.,].*$",
+    r"(?i)android profiler",
+    r"(?i)benchmark (results|libraries|library)",
+    r"(?i)garbage collection",
+    r"(?i)latency measurements?",
+    r"(?i)runtime (metrics|profiling|benchmarks)",
+    r"(?i)provide further assistance",
+    r"(?i)comprehensive analysis",
+]
 
-def clean_output(text):
-    """Remove ANSI color codes from Ollama output"""
-    ansi = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return ansi.sub('', text).strip()
+_USELESS_MARKERS = [
+    r"(?i)projectdata\.kt",
+    r"(?i)missing performance",
+    r"(?i)android profiler",
+    r"(?i)let me know",
+]
 
 
-def check_model_available(model):
-    """Check if a model is available in Ollama"""
+def clean_output(text: str) -> str:
+    ansi = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    return ansi.sub("", text).strip()
+
+
+def extract_evidence_tokens(
+    summary: str, grounded: Optional[Dict[str, str]] = None
+) -> List[str]:
+    tokens: List[str] = []
+    blob = summary or ""
+    if grounded:
+        blob += "\n" + "\n".join(grounded.values())
+
+    tokens += re.findall(r"CVE-\d{4}-\d+", blob)
+    tokens += re.findall(r"`([^`]+)`", blob)
+    tokens += re.findall(r"[\w./\\-]+\.(?:kt|java|xml)", blob, flags=re.I)
+    tokens += re.findall(r"\*\*(\d+)\*\*", blob)
+
+    out, seen = [], set()
+    for t in tokens:
+        t = t.strip()
+        if len(t) < 2 or t.lower() in seen:
+            continue
+        if t.lower() in {"high", "medium", "low", "file", "score"}:
+            continue
+        seen.add(t.lower())
+        out.append(t)
+    return out[:40]
+
+
+def polish_review_output(
+    text: str,
+    role: str = "",
+    grounded: Optional[str] = None,
+    evidence_tokens: Optional[List[str]] = None,
+) -> str:
+    """Prefer project-grounded text whenever AI output is weak or ungrounded."""
+    if grounded and (not text or text.startswith("❌") or text.startswith("⏰")):
+        return grounded
+    if not text:
+        return grounded or ""
+
+    lower = text.lower()
+    if sum(1 for m in _USELESS_MARKERS if re.search(m, lower)) >= 2:
+        return grounded or text
+
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            lines.append("")
+            continue
+        if any(re.search(p, stripped) for p in _FLUFF_PATTERNS):
+            continue
+        if re.search(r"(?i)location:\s*\*?\*?project\s*data", stripped):
+            continue
+        if re.search(r"(?i)location:\s*\*?\*?n/?a", stripped):
+            continue
+        if re.fullmatch(r"[#=\-\s*]+", stripped):
+            continue
+        lines.append(line)
+
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    cleaned = re.sub(
+        r"(?im)^[#\s]*=+\s*(PERFORMANCE|SECURITY|ARCHITECTURE)\s+ISSUE\s*=+\s*$",
+        "",
+        cleaned,
+    ).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    title_map = {
+        "analyzer": "Architecture Assessment",
+        "fixer": "Security Assessment",
+        "reviewer": "Performance & Release Readiness",
+    }
+    if role in title_map and cleaned and not cleaned.lstrip().startswith("#"):
+        cleaned = f"## {title_map[role]}\n\n{cleaned}"
+
+    useful = re.sub(r"[#=*_\-\s]", "", cleaned)
+    useful = re.sub(
+        r"(?i)architectureassessment|securityassessment|performance.?releasereadiness",
+        "",
+        useful,
+    )
+    if len(useful) < 120:
+        return grounded or cleaned
+
+    if evidence_tokens:
+        hits = sum(1 for t in evidence_tokens if t and t.lower() in cleaned.lower())
+        if hits < 1:
+            return grounded or cleaned
+
+    return cleaned
+
+
+def check_model_available(model: str) -> bool:
     try:
         result = subprocess.run(
-            ["ollama", "list"],
-            capture_output=True,
-            text=True,
-            timeout=10
+            ["ollama", "list"], capture_output=True, text=True, timeout=10
         )
         return model in result.stdout
-    except:
+    except Exception:
         return False
 
 
-def pull_model(model):
-    """Pull a model if not available"""
+def pull_model(model: str) -> bool:
     try:
-        print(f"📥 Downloading {model}... This may take a few minutes.")
         subprocess.run(
             ["ollama", "pull", model],
             capture_output=True,
             text=True,
-            timeout=600
+            timeout=600,
         )
         return True
-    except Exception as e:
-        print(f"❌ Failed to pull {model}: {e}")
+    except Exception:
         return False
 
 
 def run_model_with_context(model, code_content, issue_description, file_path="", timeout=180):
-    """
-    Run a model with specific context for exact line error fixing
-
-    Args:
-        model: The model name to use
-        code_content: The code to analyze
-        issue_description: Description of the issue
-        file_path: The file path (for context)
-        timeout: Timeout in seconds
-
-    Returns:
-        The model's response with exact line fixes
-    """
-    # Truncate code if too long (save first 2000 chars + last 500 chars)
     if len(code_content) > 2500:
         code_content = code_content[:2000] + "\n... (truncated) ...\n" + code_content[-500:]
 
-    prompt = f"""
-You are an expert Android developer. Analyze the following code and provide EXACT line-by-line fixes.
+    prompt = f"""You are a senior Android engineer writing a concise remediation note.
+Be professional. Do not invent files/lines not present in CODE. Do not ask for more data.
 
 FILE: {file_path}
-
-ISSUE TO FIX:
-{issue_description}
-
+ISSUE: {issue_description}
 CODE:
-INSTRUCTIONS:
-1. Identify the EXACT lines that need fixing
-2. Show the ORIGINAL lines
-3. Show the CORRECTED lines
-4. Explain WHY this is the correct fix
-5. Keep the fix focused and minimal
+{code_content}
 
-Format your response as:
-=== ISSUE ===
-[Brief description of the issue]
-
-=== LINE X ===
-ORIGINAL: [line content]
-FIXED: [line content]
-WHY: [explanation]
-
-=== LINE Y ===
-ORIGINAL: [line content]
-FIXED: [line content]
-WHY: [explanation]
-
-Provide the complete corrected code at the end if multiple lines need changing.
+### Finding
+[one sentence]
+### Change
+ORIGINAL: [exact line from CODE]
+FIXED: [corrected line]
+RATIONALE: [one sentence]
 """
-
     try:
-        # Check if model exists
-        if not check_model_available(model):
-            if not pull_model(model):
-                return f"❌ Model {model} not available"
-
-        # Run with increased timeout and better error handling
+        if not check_model_available(model) and not pull_model(model):
+            return f"❌ Model {model} not available"
         response = subprocess.run(
             ["ollama", "run", model],
             input=prompt,
@@ -142,23 +219,21 @@ Provide the complete corrected code at the end if multiple lines need changing.
             text=True,
             encoding="utf-8",
             timeout=timeout,
-            env={**os.environ, "NO_COLOR": "1"}
+            env={**os.environ, "NO_COLOR": "1"},
         )
         if response.returncode != 0:
             return f"❌ Model error: {response.stderr[:200]}"
         return clean_output(response.stdout)
     except subprocess.TimeoutExpired:
-        return f"⏰ Model {model} timed out after {timeout}s. Try:\n1. Use smaller code snippets\n2. Disable AI Review for large projects\n3. Use faster models (gemma2:2b)"
+        return f"⏰ Model {model} timed out after {timeout}s."
     except Exception as e:
         return f"❌ Error: {str(e)}"
+
 
 def run_model(model, prompt, timeout=180):
-    """Run a model with the given prompt"""
     try:
-        if not check_model_available(model):
-            if not pull_model(model):
-                return f"❌ Model {model} not available"
-
+        if not check_model_available(model) and not pull_model(model):
+            return f"❌ Model {model} not available"
         response = subprocess.run(
             ["ollama", "run", model],
             input=prompt,
@@ -166,154 +241,157 @@ def run_model(model, prompt, timeout=180):
             text=True,
             encoding="utf-8",
             timeout=timeout,
-            env={**os.environ, "NO_COLOR": "1"}
+            env={**os.environ, "NO_COLOR": "1"},
         )
         if response.returncode != 0:
             return f"❌ Model error: {response.stderr[:200]}"
         return clean_output(response.stdout)
     except subprocess.TimeoutExpired:
-        return f"⏰ Model {model} timed out. Try using a smaller model or disabling AI review."
+        return "⏰ Model timed out."
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
-def build_prompts(summary):
-    """Build specialized prompts for each model with reduced length"""
-    # Truncate summary if too long
-    if len(summary) > 2000:
-        summary = summary[:2000] + "\n... (truncated) ..."
 
-    base = f"""
-You are reviewing an Android project. Only use the data provided below. 
-Do NOT invent details. If data is missing, state its impact.
+def build_prompts(
+    summary: str, grounded: Optional[Dict[str, str]] = None
+) -> Dict[str, str]:
+    if len(summary) > 3500:
+        summary = summary[:3500] + "\n... (truncated) ..."
+    grounded = grounded or {}
 
-Project Data:
+    shared = """
+RULES:
+1. Polish the PROJECT-SPECIFIC DRAFT for engineering leadership.
+2. Keep EVERY number, file name, CVE, and count from the draft and facts.
+3. Improve wording only. Do NOT invent new findings.
+4. No chatbot language. No requests for Profiler/benchmarks/GC data.
+5. Output: Executive summary, Findings, Recommended actions.
+"""
+
+    def one(role_key: str, role_name: str, focus: str) -> str:
+        draft = (grounded.get(role_key) or "").strip() or "(use facts only — keep concrete)"
+        return f"""Produce the {role_name} section of an Android assessment.
+
+STATIC ANALYSIS FACTS:
 {summary}
+
+PROJECT-SPECIFIC DRAFT (source of truth):
+{draft}
+
+ROLE: {role_name}
+Focus: {focus}
+{shared}
 """
+
     return {
-        "analyzer": base + """
-You are a Senior Android Architect focused on EXACT CODE FIXES.
-Analyze the code for:
-1. Architecture issues
-2. Code smells
-3. Anti-patterns
-
-Provide the exact lines that need changing and the corrected code.
-
-Format:
-=== ARCHITECTURE ISSUE ===
-Location: [file name:line number]
-Issue: [description]
-Fix: [exact code change]
-""",
-        "fixer": base + """
-You are a Senior Android Security Engineer focused on EXACT SECURITY FIXES.
-Analyze the code for:
-1. Security vulnerabilities
-2. Hardcoded secrets
-3. Unsafe practices
-
-Provide the exact lines that need changing and the corrected code.
-
-Format:
-=== SECURITY ISSUE ===
-Location: [file name:line number]
-Issue: [description]
-Fix: [exact code change]
-""",
-        "reviewer": base + """
-You are a Senior Android Performance Engineer focused on EXACT PERFORMANCE FIXES.
-Analyze the code for:
-1. Performance bottlenecks
-2. Memory leaks
-3. Best practices violations
-
-Provide the exact lines that need changing and the corrected code.
-
-Format:
-=== PERFORMANCE ISSUE ===
-Location: [file name:line number]
-Issue: [description]
-Fix: [exact code change]
-"""
+        "analyzer": one(
+            "analyzer",
+            "Principal Android Architect",
+            "MVVM/Repository, tests, duplication, deprecated APIs",
+        ),
+        "fixer": one(
+            "fixer",
+            "Principal Mobile Security Engineer",
+            "CVEs, secrets, HTTP, null-assertion risk",
+        ),
+        "reviewer": one(
+            "reviewer",
+            "Principal Android Performance & Release Engineer",
+            "println/Log.d, !!, Compose, complexity, tests (static only)",
+        ),
     }
 
-def review_project(summary, code_content="", issue_description=""):
+
+def review_project(
+    summary,
+    code_content="",
+    issue_description="",
+    grounded: Optional[Dict[str, str]] = None,
+):
     """
-    Run AI models for exact line error detection and fixing
-
-    Args:
-        summary: Project summary
-        code_content: The code to analyze (optional)
-        issue_description: Description of the issue (optional)
-
-    Returns:
-        Dictionary with reviews from each model
+    Project-first narratives. Models may polish; ungrounded AI text is discarded.
     """
-    # Check if summary is too long and truncate
-    if len(summary) > 3000:
-        summary = summary[:3000] + "\n... (summary truncated for performance) ..."
+    grounded = dict(grounded or {})
+    if len(summary) > 4000:
+        summary = summary[:4000] + "\n... (summary truncated) ..."
 
-    prompts = build_prompts(summary)
-    results = {}
+    evidence = extract_evidence_tokens(summary, grounded)
 
     try:
         subprocess.run(["ollama", "list"], capture_output=True, check=True, timeout=5)
-    except:
-        return {"error": "❌ Ollama is not running. Start with: ollama serve"}
+        ollama_ok = True
+    except Exception:
+        ollama_ok = False
 
-    # If we have specific code and issue, use the specialized prompt
+    if not ollama_ok:
+        return grounded if grounded else {
+            "error": "❌ Ollama is not running. Start with: ollama serve"
+        }
+
     if code_content and issue_description:
-        # Use only the fixer model for speed
-        model = MODELS["fixer"]["name"]
-        timeout = MODELS["fixer"]["timeout"]
+        results = dict(grounded)
         try:
             results["fixer"] = run_model_with_context(
-                model,
-                code_content[:2000],  # Truncate code
+                MODELS["fixer"]["name"],
+                code_content[:2000],
                 issue_description,
-                timeout=timeout
+                timeout=MODELS["fixer"]["timeout"],
             )
         except Exception as e:
-            results["fixer"] = f"❌ Failed: {str(e)}"
-
-        # Also run the analyzer if time permits
+            results["fixer"] = grounded.get("fixer") or f"❌ Failed: {e}"
         try:
-            model2 = MODELS["analyzer"]["name"]
             results["analyzer"] = run_model_with_context(
-                model2,
-                code_content[:1500],  # Smaller chunk
+                MODELS["analyzer"]["name"],
+                code_content[:1500],
                 issue_description,
-                timeout=120
+                timeout=120,
             )
-        except:
-            results["analyzer"] = "⏰ Skipped (time constraint)"
-    else:
-        # Use the standard parallel review with shorter prompts
-        with ThreadPoolExecutor(max_workers=2) as executor:  # Reduced from 3 to 2
-            futures = {}
-            for role, model_info in MODELS.items():
-                model = model_info["name"]
-                timeout = model_info["timeout"]
-                prompt_key = "analyzer" if role == "analyzer" else "fixer" if role == "fixer" else "reviewer"
-                futures[executor.submit(run_model, model, prompts.get(prompt_key, ""), timeout)] = role
+        except Exception:
+            pass
+        return results
 
-            for future in as_completed(futures):
-                role = futures[future]
-                try:
-                    results[role] = future.result()
-                except Exception as e:
-                    results[role] = f"❌ Failed: {str(e)}"
+    # Default to grounded project text; replace only if polish stays grounded
+    results = dict(grounded)
+    prompts = build_prompts(summary, grounded=grounded)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {
+            executor.submit(
+                run_model, info["name"], prompts[role], info["timeout"]
+            ): role
+            for role, info in MODELS.items()
+        }
+        for future in as_completed(futures):
+            role = futures[future]
+            base = grounded.get(role, "")
+            try:
+                raw = future.result()
+                results[role] = polish_review_output(
+                    raw,
+                    role=role,
+                    grounded=base,
+                    evidence_tokens=evidence,
+                )
+            except Exception:
+                results[role] = base
 
     return results
 
+
 def get_model_info():
-    """Return information about the currently configured models"""
     return MODELS
 
+
 def get_best_model_for_fixes():
-    """Return the best model for exact line fixes"""
     return MODELS["fixer"]["name"]
 
+
 def get_model_for_analysis():
-    """Return the best model for code analysis"""
     return MODELS["analyzer"]["name"]
+
+
+def role_display_label(role: str) -> str:
+    info = MODELS.get(role, {})
+    title = info.get("title", role.title())
+    name = info.get("name", "")
+    return f"{title} · {name}" if name else title
