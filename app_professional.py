@@ -2,8 +2,8 @@ import streamlit as st
 
 # ── set_page_config MUST be the absolute first st. command ─────
 st.set_page_config(
-    page_title="Android Intelligence Agent Pro - Enterprise",
-    page_icon="🤖",
+    page_title="AppForge",
+    page_icon="🛠️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -110,8 +110,8 @@ st.markdown("""
 .main-header p  { font-size: 1.1rem; opacity: 0.9; margin: 0.5rem 0 0 0; }
 .sidebar-logo { text-align: center; padding: 15px 0; margin-bottom: 10px; }
 .sidebar-logo svg { 
-    width: 50px;
-    height: 50px;
+    width: 80px;
+    height: 80px;
     border-radius: 12px;
     box-shadow: 0 2px 10px rgba(34, 211, 238, 0.15);
 }
@@ -119,10 +119,10 @@ st.markdown("""
     color: #667eea; 
     margin: 8px 0 3px 0;
     font-weight: 700; 
-    font-size: 16px;
+    font-size: 22px;
 }
 .sidebar-logo p  { 
-    font-size: 10px;
+    font-size: 13px;
     color: #8B5CF6; 
     margin: 0; 
     font-weight: 500; 
@@ -131,8 +131,26 @@ st.markdown("""
     display: inline-block;
     background: linear-gradient(135deg, #22D3EE, #8B5CF6);
     color: white; padding: 2px 10px; border-radius: 10px;
-    font-size: 8px;
+    font-size: 11px;
     font-weight: 600; margin-top: 4px;
+}
+/* ── SIDEBAR TOGGLE LABELS ── */
+.stToggle label {
+    font-size: 15px !important;
+    font-weight: 500;
+}
+
+/* ── SIDEBAR INFO BOX ── */
+.sidebar-info {
+    background: #f0f4ff;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border-left: 4px solid #667eea;
+    font-size: 14px !important;
+    line-height: 1.6;
+}
+.sidebar-info code {
+    font-size: 13px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -140,10 +158,10 @@ st.markdown("""
 # ── HEADER ─────────────────────────────────────────────────────
 st.markdown("""
 <div class="main-header">
-    <h1>🤖 Android Intelligence Agent Pro</h1>
-    <p>Enterprise-Grade AI Code Review Platform</p>
+    <h1>🛠️ AppForge</h1>
+    <p>🧠 AI-Powered Android Code Review — On Your Machine</p>
     <p style="font-size:0.9rem;opacity:0.8;">
-        🚀 Multi-Model AI Consensus · 🔒 100% On-Premise · 📊 Advanced Analytics
+        🛠️ Forge better Android code · 🔒  Zero cloud · 🧠 Three AI models
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -174,21 +192,21 @@ with st.sidebar:
     st.markdown(f"""
     <div class="sidebar-logo">
         {CUSTOM_LOGO_SVG}
-        <h3>AI Intelligence</h3>
-        <p>Enterprise Edition v2.0</p>
-        <span class="status-badge">⚡ AI POWERED</span>
+        <h3>AppForge</h3>
+        <p>Core Edition v1.0</p>
+        <span class="status-badge">🛠️FORGING</span>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("### ⚙️ Analysis Configuration")
+    st.markdown("### ⚙️ Forge Settings")
     run_ai = st.toggle("🧠 AI Review", value=True)
     run_auto_fix = st.toggle("🔧 Auto-Fix Suggestions", value=True)
     run_vulns = st.toggle("🛡️ CVE Scanning", value=True)
     run_compose = st.toggle("🎨 Compose Analysis", value=True)
 
     st.markdown("---")
-    st.markdown("### 🧠 AI Models")
+    st.markdown("### 🧠 Model Council")
     try:
         model_info = get_model_info()
         st.info(f"""
@@ -225,7 +243,7 @@ with st.sidebar:
     st.caption(f"Analysis ready: **{'Yes' if st.session_state.analysis_done else 'No'}**")
 
 # ── PROJECT PATH (Truly Cross-Platform) ──────────────────────
-st.markdown("### 📁 Select Android Project")
+st.markdown("### 📁 Load Your Project")
 
 # Show current path status
 if st.session_state.project_path and os.path.exists(st.session_state.project_path):
@@ -234,7 +252,7 @@ elif st.session_state.project_path:
     st.warning(f"⚠️ Path does not exist: {st.session_state.project_path}")
 
 # Simple path input with helper buttons (Works on ALL platforms)
-st.markdown("#### Enter your project path")
+st.markdown("#### Project path")
 
 # Path input with helper buttons
 col1, col2, col3 = st.columns([5, 1, 1])
@@ -251,14 +269,14 @@ with col1:
 with col2:
     st.write("")  # Spacing
     st.write("")  # Spacing
-    if st.button("📂 Open Explorer", use_container_width=True):
+    if st.button("📂 Browse", use_container_width=True):
         if open_file_explorer():
             st.info("📂 File explorer opened. Copy the path and paste it above.")
 
 with col3:
     st.write("")  # Spacing
     st.write("")  # Spacing
-    if st.button("🔄 Reset", use_container_width=True):
+    if st.button("↺ Clear", use_container_width=True):
         st.session_state.project_path = ""
         st.rerun()
 
@@ -267,7 +285,7 @@ if project_path:
     st.session_state.project_path = project_path
 
 # ── QUICK PATH SUGGESTIONS (Cross-Platform) ──────────────────
-with st.expander("💡 Quick Path Suggestions", expanded=False):
+with st.expander("💡 Recent Projects", expanded=False):
     st.markdown("**Common Android project locations:**")
 
     # Detect OS and set appropriate paths
@@ -539,7 +557,7 @@ col5.metric("🔒 CVEs Found", len(vulns["vulnerabilities"]))
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Overview", "🏗 Architecture", "🛡 Security",
-    "🎨 Compose", "🤖 AI Review", "🔧 Auto-Fix"
+    "🎨 Compose", "🛠️ AI Review", "🔧 Auto-Fix"
 ])
 
 # ── TAB 1: Overview ───────────────────────────────────────────
@@ -791,6 +809,6 @@ with tab6:
 
 st.markdown("---")
 st.caption(
-    "🤖 **Android Intelligence Agent Pro** · Enterprise Edition · "
-    "🚀 Multi-Model AI · 🔒 100% On-Premise · © 2026"
+    "🛠️ **AppForge ** · Android Code Intelligence · "
+    "🧠 Multi-Model AI · 🔒  Zero cloud · 🧠 Three AI models · © 2026"
 )
