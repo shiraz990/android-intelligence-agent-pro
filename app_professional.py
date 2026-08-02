@@ -648,38 +648,46 @@ with tab3:
         st.error(f"{issue['issue']} — **{issue['file']}** ({issue['count']}×)")
 
 # ── TAB 4: Compose ────────────────────────────────────────────
+# ── TAB 4: Compose ────────────────────────────────────────────
 with tab4:
     st.markdown("### 🎨 Jetpack Compose Analysis")
-    if compose_issues:
+
+    if not run_compose:
+        st.info("⏭️ **Compose Analysis was disabled** during analysis.")
+        st.caption("💡 To enable: Go to sidebar → toggle '🎨 Compose Analysis' → re-run analysis")
+    elif compose_issues:
+        st.warning(f"Found {len(compose_issues)} Compose issue(s)")
         for issue in compose_issues:
             fn = {"error": st.error, "warning": st.warning}.get(issue["severity"], st.info)
             fn(f"**{issue['file']}** — {issue['issue']}")
     else:
         st.success("✅ No Compose recomposition issues detected")
-
 # ── TAB 5: AI Review ──────────────────────────────────────────
-with tab5:
-    st.markdown("### 🧠 Multi-Model AI Review")
-    if not run_ai:
-        st.info("AI Review is disabled. Enable it in the sidebar and re-run.")
-    elif not ai_reviews:
-        st.warning("No AI reviews returned. Check Ollama is running.")
-        st.code("ollama serve", language="bash")
-    elif "error" in ai_reviews:
-        st.error(ai_reviews["error"])
-    else:
-        labels = {
-            "fixer": "🛡 Security & Fixes · qwen2.5-coder:3b",
-            "analyzer": "🏗 Architecture · deepseek-coder:1.3b",
-            "reviewer": "⚡ Performance · gemma2:2b",
-        }
-        for role, text in ai_reviews.items():
-            with st.expander(labels.get(role, role.title()), expanded=True):
-                if isinstance(text, str) and text.startswith("❌"):
-                    st.error(text)
-                else:
-                    st.markdown(text)
+# ── TAB 3: Security ───────────────────────────────────────────
+with tab3:
+    st.markdown("### 🛡️ Security Analysis")
 
+    if not run_vulns:
+        st.info("⏭️ **CVE Scanning was disabled** during analysis.")
+        st.caption("💡 To enable: Go to sidebar → toggle '🛡️ CVE Scanning' → re-run analysis")
+    else:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("CVEs Found", len(vulns.get("vulnerabilities", [])))
+        c2.metric("Dependencies Scanned", vulns.get("scanned", 0))
+        c3.metric("API Keys Leaked", rules.get("api_keys", 0))
+
+        if vulns.get("vulnerabilities"):
+            for v in vulns["vulnerabilities"]:
+                with st.expander(f"🚨 {v.get('cve', '?')} — {v.get('dependency', '?')}"):
+                    st.write(v.get("description", "No description"))
+                    st.caption(f"Severity: {v.get('severity', 'Unknown')} · Source: {v.get('source', '')}")
+        else:
+            st.success("✅ No known CVEs found")
+
+    if rules.get("security_issues", []):
+        st.subheader("🔐 Security Issues in Code")
+        for issue in rules["security_issues"]:
+            st.error(f"{issue['issue']} — **{issue['file']}** ({issue['count']}×)")
 # ── TAB 6: Auto-Fix ───────────────────────────────────────────
 with tab6:
     st.markdown("### 🔧 Auto-Fix System")
