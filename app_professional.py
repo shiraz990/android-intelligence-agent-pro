@@ -202,7 +202,7 @@ with st.sidebar:
     st.markdown("### ⚙️ Forge Settings")
     run_ai = st.toggle("🧠 AI Review", value=True)
     run_auto_fix = st.toggle("🔧 Auto-Fix Suggestions", value=True)
-    run_vulns = st.toggle("🛡️ CVE Scanning", value=True)
+    run_vulns = st.toggle("🛡️ CVE Scanning-(Common Vulnerabilities and Exposures)", value=True)
     run_compose = st.toggle("🎨 Compose Analysis", value=True)
 
     st.markdown("---")
